@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../services/share_content.dart';
+import '../../../widgets/share_button.dart';
 import '../models/note.dart';
 
 class NoteListTile extends StatelessWidget {
@@ -72,7 +74,19 @@ class NoteListTile extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: Text(_formatDate(note.updatedAt)),
-        trailing: const Icon(Icons.chevron_right),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ShareButton(
+              content: ShareContent.note(
+                sourceAppId: 'notes',
+                title: note.title,
+                body: note.content,
+              ),
+            ),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
         onTap: onTap,
       ),
     );

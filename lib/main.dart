@@ -1,12 +1,36 @@
 import 'package:flutter/material.dart';
 import 'core/app_registry.dart';
+import 'services/config_service.dart';
+import 'services/autocompletion_service.dart';
+import 'services/queue_service.dart';
+import 'core/logs_storage.dart';
 import 'core/sub_app.dart';
 import 'apps/launcher/launcher_app.dart';
 import 'apps/launcher/launcher_screen.dart';
+import 'apps/logs/logs_app.dart';
 import 'apps/notes/notes_app.dart';
+import 'apps/queues/queues_app.dart';
+import 'apps/settings/settings_app.dart';
+import 'apps/vocabulary/vocabulary_app.dart';
+import 'apps/vocabulary/services/vocabulary_definition_service.dart';
+import 'apps/chat/chat_app.dart';
+import 'apps/chat/services/chat_title_service.dart';
+import 'apps/file_system/file_system_app.dart';
+import 'apps/summaries/summaries_app.dart';
+import 'services/summarizer_service.dart';
+import 'core/app_bus.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ConfigService.instance.initialize();
+  AutocompletionService.initializeDefaults();
+  await LogsStorage.instance.init();
+  await AppBus.instance.init();
+  await QueueService.instance.init();
+  await VocabularyDefinitionService.instance.init();
+  await SummarizerService.instance.init();
   _registerApps();
+  await _registerEventHandlers();
   runApp(const PlaygroundApp());
 }
 
@@ -16,15 +40,15 @@ void _registerApps() {
   // Register the launcher itself (for testing/display purposes)
   registry.register(LauncherApp());
 
-  // Register demo apps for testing
-  registry.register(_DemoApp(
-    id: 'settings',
-    name: 'Settings',
-    icon: Icons.settings,
-    themeColor: Colors.grey,
-  ));
-
+  // Register apps
+  registry.register(SettingsApp());
   registry.register(NotesApp());
+  registry.register(VocabularyApp());
+  registry.register(ChatApp());
+  registry.register(LogsApp());
+  registry.register(QueuesApp());
+  registry.register(FileSystemApp());
+  registry.register(SummariesApp());
 
   registry.register(_DemoApp(
     id: 'calculator',
@@ -32,6 +56,14 @@ void _registerApps() {
     icon: Icons.calculate,
     themeColor: Colors.teal,
   ));
+}
+
+Future<void> _registerEventHandlers() async {
+  final chatApp = AppRegistry.instance.getApp('chat') as ChatApp;
+  await chatApp.onInit();
+  await ChatTitleService.instance.init(
+    storage: chatApp.storage,
+  );
 }
 
 class PlaygroundApp extends StatelessWidget {

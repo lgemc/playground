@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../services/config_service.dart';
+import '../services/share_service.dart';
 import 'sub_app.dart';
 
 /// Central registry that discovers, registers, and manages all sub-apps.
@@ -16,9 +18,15 @@ class AppRegistry {
   List<SubApp> get apps => _apps.values.toList();
 
   /// Register a sub-app
-  void register(SubApp app) {
+  void register(SubApp app) async {
     _apps[app.id] = app;
+    await ConfigService.instance.loadAppOverrides(app.id);
     app.onInit();
+
+    // Register share receivers if app accepts any content types
+    if (app.acceptedShareTypes.isNotEmpty) {
+      ShareService.instance.registerReceiver(app.id, app.acceptedShareTypes);
+    }
   }
 
   /// Get a specific app by ID

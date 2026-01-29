@@ -45,6 +45,14 @@ This is a Flutter-based modular application container. The core concept is a "pl
 - Preferences stored as: `data/{app_id}/settings.json`
 - Complex data uses SQLite
 
+### UI Interaction Guidelines
+
+**List Item Actions**: Use swipe gestures (`Dismissible` widget) instead of popup menus for list item actions:
+- Swipe left (endToStart): Delete action with red background
+- Swipe right (startToEnd): Secondary action (e.g., restart, archive) with blue background
+- Always show confirmation dialogs before destructive actions
+- Reference implementation: `lib/apps/vocabulary/widgets/word_list_tile.dart`
+
 ### Planning Documents
 
 The `ai/` folder contains planning documents for features (e.g., `ai/_launcher.md`).

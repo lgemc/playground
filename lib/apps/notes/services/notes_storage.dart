@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/app_bus.dart';
+import '../../../core/app_event.dart';
 import '../models/note.dart';
 
 class NotesStorage {
@@ -75,6 +77,7 @@ class NotesStorage {
     // Update metadata
     final notes = await loadNotes();
     final existingIndex = notes.indexWhere((n) => n.id == note.id);
+    final isNew = existingIndex < 0;
 
     if (existingIndex >= 0) {
       notes[existingIndex] = note;
@@ -83,6 +86,16 @@ class NotesStorage {
     }
 
     await _saveMetadata(notes);
+
+    // Emit event to app bus
+    await AppBus.instance.emit(AppEvent.create(
+      type: isNew ? 'note.created' : 'note.updated',
+      appId: 'notes',
+      metadata: {
+        'noteId': note.id,
+        'title': note.title,
+      },
+    ));
   }
 
   Future<void> deleteNote(String id) async {
@@ -98,6 +111,13 @@ class NotesStorage {
     final notes = await loadNotes();
     notes.removeWhere((n) => n.id == id);
     await _saveMetadata(notes);
+
+    // Emit event to app bus
+    await AppBus.instance.emit(AppEvent.create(
+      type: 'note.deleted',
+      appId: 'notes',
+      metadata: {'noteId': id},
+    ));
   }
 
   Future<void> _saveMetadata(List<Note> notes) async {
