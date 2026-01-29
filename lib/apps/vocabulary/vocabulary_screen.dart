@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_registry.dart';
+import '../../widgets/sync_widget.dart';
 import 'models/word.dart';
 import 'word_editor_screen.dart';
-import 'services/vocabulary_storage.dart';
+import 'services/vocabulary_storage_v2.dart';
 import 'widgets/word_list_tile.dart';
 
 class VocabularyScreen extends StatefulWidget {
@@ -27,7 +28,7 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
   Future<void> _loadWords() async {
     setState(() => _isLoading = true);
     try {
-      final words = await VocabularyStorage.instance.loadWords();
+      final words = await VocabularyStorageV2.instance.loadWords();
       setState(() {
         _words = words;
         _isLoading = false;
@@ -73,7 +74,7 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
 
   Future<void> _deleteWord(Word word) async {
     try {
-      await VocabularyStorage.instance.deleteWord(word.id);
+      await VocabularyStorageV2.instance.deleteWord(word.id);
       _loadWords();
     } catch (e) {
       if (mounted) {
@@ -94,6 +95,20 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
         ),
         title: const Text('Vocabulary'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.sync),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const SyncWidget(
+                    appId: 'vocabulary',
+                    appName: 'Vocabulary',
+                  ),
+                ),
+              );
+            },
+            tooltip: 'Sync with other devices',
+          ),
           IconButton(
             icon: const Icon(Icons.add),
             onPressed: _createWord,

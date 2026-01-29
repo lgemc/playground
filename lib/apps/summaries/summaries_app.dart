@@ -5,7 +5,7 @@ import '../../core/sub_app.dart';
 import '../../services/queue_service.dart';
 import '../../services/share_content.dart';
 import 'screens/summaries_screen.dart';
-import 'services/summary_storage.dart';
+import 'services/summary_storage_v2.dart';
 
 class SummariesApp extends SubApp {
   @override
@@ -23,7 +23,7 @@ class SummariesApp extends SubApp {
   @override
   void onInit() {
     // Initialize storage
-    SummaryStorage.instance.init();
+    SummaryStorageV2.instance.init();
   }
 
   @override
@@ -55,7 +55,7 @@ class SummariesApp extends SubApp {
     }
 
     // Create a pending summary
-    final summary = await SummaryStorage.instance.create(
+    final summary = await SummaryStorageV2.instance.create(
       fileId: fileId,
       fileName: fileName,
       filePath: filePath,

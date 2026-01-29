@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../../../core/app_registry.dart';
 import '../models/summary.dart';
-import '../services/summary_storage.dart';
+import '../services/summary_storage_v2.dart';
 
 class SummaryDetailScreen extends StatefulWidget {
   final Summary summary;
@@ -18,7 +18,7 @@ class SummaryDetailScreen extends StatefulWidget {
 
 class _SummaryDetailScreenState extends State<SummaryDetailScreen> {
   late Summary _summary;
-  final _storage = SummaryStorage.instance;
+  final _storage = SummaryStorageV2.instance;
 
   @override
   void initState() {

@@ -4,7 +4,7 @@ import '../../core/sub_app.dart';
 import '../../services/share_content.dart';
 import 'models/note.dart';
 import 'notes_screen.dart';
-import 'services/notes_storage.dart';
+import 'services/notes_storage_v2.dart';
 
 class NotesApp extends SubApp {
   @override
@@ -47,7 +47,7 @@ class NotesApp extends SubApp {
         final text = content.data['text'] as String? ?? '';
         if (text.isNotEmpty) {
           final note = Note.create(title: '', content: text);
-          await NotesStorage.instance.saveNote(note);
+          await NotesStorageV2.instance.saveNote(note);
         }
         break;
       case ShareContentType.note:
@@ -55,7 +55,7 @@ class NotesApp extends SubApp {
         final title = content.data['title'] as String? ?? '';
         final body = content.data['body'] as String? ?? '';
         final note = Note.create(title: title, content: body);
-        await NotesStorage.instance.saveNote(note);
+        await NotesStorageV2.instance.saveNote(note);
         break;
       case ShareContentType.url:
         // Create note with URL as content
@@ -65,7 +65,7 @@ class NotesApp extends SubApp {
           title: urlTitle,
           content: '[$urlTitle]($url)',
         );
-        await NotesStorage.instance.saveNote(note);
+        await NotesStorageV2.instance.saveNote(note);
         break;
       default:
         break;

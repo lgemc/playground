@@ -63,6 +63,22 @@ class VocabularyStorage {
     }
   }
 
+  /// Check if a word with the same text already exists (case-insensitive).
+  /// Returns the existing word if found, null otherwise.
+  /// Excludes the word with the given [excludeId] from the check.
+  Future<Word?> findDuplicateWord(String wordText, {String? excludeId}) async {
+    final words = await loadWords();
+    final normalizedText = wordText.trim().toLowerCase();
+
+    try {
+      return words.firstWhere(
+        (w) => w.word.toLowerCase() == normalizedText && w.id != excludeId,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> saveWord(Word word, {bool wordChanged = false}) async {
     final words = await loadWords();
     final existingIndex = words.indexWhere((w) => w.id == word.id);

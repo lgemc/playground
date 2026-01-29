@@ -2,9 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../services/logger.dart';
 import 'models/word.dart';
-import 'services/vocabulary_storage.dart';
+import 'services/vocabulary_storage_v2.dart';
 import 'services/vocabulary_streaming_service.dart';
+
+final _logger = Logger(appId: 'vocabulary', appName: 'Vocabulary');
 
 class WordEditorScreen extends StatefulWidget {
   final Word word;
@@ -148,6 +151,33 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
 
       final wordChanged = _originalWord != wordText;
 
+      // Check for duplicates if the word text changed
+      if (wordChanged) {
+        final duplicate = await VocabularyStorageV2.instance.findDuplicateWord(
+          wordText,
+          excludeId: widget.word.id,
+        );
+
+        if (duplicate != null) {
+          _logger.warning(
+            'Duplicate word attempt: "$wordText" already exists',
+            eventType: 'duplicate_word',
+            metadata: {'attemptedWord': wordText, 'existingWordId': duplicate.id},
+          );
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Word "$wordText" already exists'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+            setState(() => _isSaving = false);
+          }
+          return;
+        }
+      }
+
       final phrases = _phraseControllers
           .map((c) => c.text.trim())
           .where((p) => p.isNotEmpty)
@@ -160,7 +190,7 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
         updatedAt: DateTime.now(),
       );
 
-      await VocabularyStorage.instance.saveWord(
+      await VocabularyStorageV2.instance.saveWord(
         updatedWord,
         wordChanged: wordChanged,
       );

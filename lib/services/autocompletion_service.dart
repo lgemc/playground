@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:openai_dart/openai_dart.dart';
 import 'config_service.dart';
+import '../core/tool.dart';
 
 /// Configuration keys for the autocompletion service (global scope)
 class AutocompletionConfig {
@@ -24,16 +26,34 @@ enum MessageRole {
   system,
   user,
   assistant,
+  tool,
+}
+
+/// Represents a tool call made by the assistant
+class ChatToolCall {
+  final String id;
+  final String name;
+  final Map<String, dynamic> arguments;
+
+  const ChatToolCall({
+    required this.id,
+    required this.name,
+    required this.arguments,
+  });
 }
 
 /// A chat message with role and content
 class ChatMessage {
   final MessageRole role;
   final String content;
+  final List<ChatToolCall>? toolCalls;
+  final String? toolCallId;
 
   const ChatMessage({
     required this.role,
     required this.content,
+    this.toolCalls,
+    this.toolCallId,
   });
 
   ChatCompletionMessage toOpenAI() {
@@ -45,7 +65,27 @@ class ChatMessage {
           content: ChatCompletionUserMessageContent.string(content),
         );
       case MessageRole.assistant:
+        if (toolCalls != null && toolCalls!.isNotEmpty) {
+          return ChatCompletionMessage.assistant(
+            content: content.isEmpty ? null : content,
+            toolCalls: toolCalls!
+                .map((tc) => ChatCompletionMessageToolCall(
+                      id: tc.id,
+                      type: ChatCompletionMessageToolCallType.function,
+                      function: ChatCompletionMessageFunctionCall(
+                        name: tc.name,
+                        arguments: jsonEncode(tc.arguments),
+                      ),
+                    ))
+                .toList(),
+          );
+        }
         return ChatCompletionMessage.assistant(content: content);
+      case MessageRole.tool:
+        return ChatCompletionMessage.tool(
+          toolCallId: toolCallId ?? '',
+          content: content,
+        );
     }
   }
 }
@@ -63,6 +103,33 @@ class CompletionResponse {
     this.promptTokens,
     this.completionTokens,
   });
+}
+
+/// Events emitted during streaming completion with tools
+sealed class ChatStreamEvent {}
+
+/// A chunk of content from the assistant
+class ContentChunk extends ChatStreamEvent {
+  final String content;
+  ContentChunk(this.content);
+}
+
+/// A tool call requested by the assistant
+class ToolCallEvent extends ChatStreamEvent {
+  final String id;
+  final String name;
+  final Map<String, dynamic> arguments;
+  ToolCallEvent(this.id, this.name, this.arguments);
+}
+
+/// Indicates the completion is done
+class CompletionDone extends ChatStreamEvent {}
+
+/// Helper class to build tool calls from streaming chunks
+class _ToolCallBuilder {
+  String? id;
+  String? name;
+  final StringBuffer argumentsBuffer = StringBuffer();
 }
 
 /// Service for generating text completions using OpenAI-compatible APIs.
@@ -225,6 +292,121 @@ class AutocompletionService {
 
       if (delta != null) {
         yield delta;
+      }
+    }
+  }
+
+  /// Generate a completion with tools support (streaming)
+  /// Yields ChatStreamEvent objects for content chunks and tool calls
+  Stream<ChatStreamEvent> completeWithTools(
+    List<ChatMessage> messages, {
+    List<Tool>? tools,
+    String? model,
+    int? maxTokens,
+    double? temperature,
+  }) async* {
+    if (!isConfigured) {
+      throw StateError(
+        'AutocompletionService not configured. Set ${AutocompletionConfig.apiKey} in config.',
+      );
+    }
+
+    final config = ConfigService.instance;
+    final effectiveModel =
+        model ?? config.get(AutocompletionConfig.model) ?? AutocompletionConfig.defaultModel;
+    final effectiveMaxTokens = maxTokens ??
+        int.tryParse(config.get(AutocompletionConfig.maxTokens) ?? '') ??
+        int.parse(AutocompletionConfig.defaultMaxTokens);
+    final effectiveTemperature = temperature ??
+        double.tryParse(config.get(AutocompletionConfig.temperature) ?? '') ??
+        double.parse(AutocompletionConfig.defaultTemperature);
+
+    final client = _getClient();
+
+    // Build tools in OpenAI format
+    final openAITools = tools?.map((tool) => ChatCompletionTool(
+          type: ChatCompletionToolType.function,
+          function: FunctionObject(
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          ),
+        )).toList();
+
+    final stream = client.createChatCompletionStream(
+      request: CreateChatCompletionRequest(
+        model: ChatCompletionModel.modelId(effectiveModel),
+        messages: messages.map((m) => m.toOpenAI()).toList(),
+        maxCompletionTokens: effectiveMaxTokens,
+        temperature: effectiveTemperature,
+        tools: openAITools,
+      ),
+    );
+
+    // Track tool calls being built up from streaming chunks
+    final toolCallsInProgress = <String, _ToolCallBuilder>{};
+
+    await for (final chunk in stream) {
+      final choice = chunk.choices.firstOrNull;
+      if (choice == null) continue;
+
+      // Handle content delta
+      final contentDelta = choice.delta.content;
+      if (contentDelta != null && contentDelta.isNotEmpty) {
+        yield ContentChunk(contentDelta);
+      }
+
+      // Handle tool call deltas
+      final toolCallDeltas = choice.delta.toolCalls;
+      if (toolCallDeltas != null) {
+        for (final toolCallDelta in toolCallDeltas) {
+          final index = toolCallDelta.index;
+          final indexKey = index.toString();
+
+          // Initialize builder if this is a new tool call
+          if (!toolCallsInProgress.containsKey(indexKey)) {
+            toolCallsInProgress[indexKey] = _ToolCallBuilder();
+          }
+
+          final builder = toolCallsInProgress[indexKey]!;
+
+          // Accumulate data from delta
+          if (toolCallDelta.id != null) {
+            builder.id = toolCallDelta.id!;
+          }
+          if (toolCallDelta.function?.name != null) {
+            builder.name = toolCallDelta.function!.name!;
+          }
+          if (toolCallDelta.function?.arguments != null) {
+            builder.argumentsBuffer.write(toolCallDelta.function!.arguments!);
+          }
+        }
+      }
+
+      // Check if stream is done
+      final finishReason = choice.finishReason;
+      if (finishReason != null) {
+        print('Stream finished. Reason: $finishReason');
+
+        // If finished with tool_calls, emit the tool call events
+        if (finishReason == ChatCompletionFinishReason.toolCalls) {
+          for (final builder in toolCallsInProgress.values) {
+            if (builder.id != null && builder.name != null) {
+              Map<String, dynamic> args = {};
+              try {
+                final argsString = builder.argumentsBuffer.toString();
+                if (argsString.isNotEmpty) {
+                  args = jsonDecode(argsString) as Map<String, dynamic>;
+                }
+              } catch (e) {
+                print('Error parsing tool call arguments: $e');
+              }
+              yield ToolCallEvent(builder.id!, builder.name!, args);
+            }
+          }
+        }
+
+        yield CompletionDone();
       }
     }
   }

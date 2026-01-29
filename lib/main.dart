@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'core/app_registry.dart';
 import 'services/config_service.dart';
 import 'services/autocompletion_service.dart';
@@ -19,9 +21,22 @@ import 'apps/file_system/file_system_app.dart';
 import 'apps/summaries/summaries_app.dart';
 import 'services/summarizer_service.dart';
 import 'core/app_bus.dart';
+import 'apps/lms/creator/lms_creator_app.dart';
+import 'apps/lms/viewer/lms_viewer_app.dart';
+import 'core/sync/services/device_sync_service.dart';
+import 'core/sync/services/device_id_service.dart';
+import 'core/sync/database/sync_database.dart';
+import 'apps/vocabulary/services/vocabulary_storage_v2.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize sqflite_ffi for desktop platforms
+  if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
+
   await ConfigService.instance.initialize();
   AutocompletionService.initializeDefaults();
   await LogsStorage.instance.init();
@@ -29,6 +44,7 @@ void main() async {
   await QueueService.instance.init();
   await VocabularyDefinitionService.instance.init();
   await SummarizerService.instance.init();
+  await _initSyncService();
   _registerApps();
   await _registerEventHandlers();
   runApp(const PlaygroundApp());
@@ -49,6 +65,8 @@ void _registerApps() {
   registry.register(QueuesApp());
   registry.register(FileSystemApp());
   registry.register(SummariesApp());
+  registry.register(LmsCreatorApp());
+  registry.register(LmsViewerApp());
 
   registry.register(_DemoApp(
     id: 'calculator',
@@ -56,6 +74,47 @@ void _registerApps() {
     icon: Icons.calculate,
     themeColor: Colors.teal,
   ));
+}
+
+/// Global sync service singleton
+class SyncServiceProvider {
+  static DeviceSyncService? _instance;
+
+  static DeviceSyncService? get instance => _instance;
+
+  static void setInstance(DeviceSyncService service) {
+    _instance = service;
+  }
+}
+
+Future<void> _initSyncService() async {
+  final deviceIdService = DeviceIdService.instance;
+  final syncDatabase = SyncDatabase();
+
+  final syncService = DeviceSyncService(
+    deviceIdService: deviceIdService,
+    syncDatabase: syncDatabase,
+  );
+
+  // Register callbacks for vocabulary app
+  syncService.setGetChangesCallback((appId, since) async {
+    if (appId == 'vocabulary') {
+      return await VocabularyStorageV2.instance.getChangesForSync(since);
+    }
+    return [];
+  });
+
+  syncService.setApplyChangesCallback((appId, entities) async {
+    if (appId == 'vocabulary') {
+      await VocabularyStorageV2.instance.applyChangesFromSync(entities);
+    }
+  });
+
+  // Start the sync service (discovery and listening for connections)
+  await syncService.start();
+
+  // Make it available globally
+  SyncServiceProvider.setInstance(syncService);
 }
 
 Future<void> _registerEventHandlers() async {

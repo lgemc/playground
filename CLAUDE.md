@@ -45,6 +45,22 @@ This is a Flutter-based modular application container. The core concept is a "pl
 - Preferences stored as: `data/{app_id}/settings.json`
 - Complex data uses SQLite
 
+### Inter-App Communication
+
+**AppBus** (`lib/core/app_bus.dart`): Event bus for pub/sub messaging between apps. Events are persisted in SQLite. Subscribe with `AppBus.instance.subscribe()` and emit with `AppBus.instance.emit()`.
+
+**QueueService** (`lib/services/queue_service.dart`): Message queue system that routes AppBus events to specific queues. Provides RabbitMQ-like consumption with acknowledgment, exponential backoff, and dead letter queues (DLQ). Queue configurations are in `lib/services/queue_config.dart`.
+
+**ShareService** (`lib/services/share_service.dart`): Enables content sharing between apps. Apps declare accepted content types via `acceptedShareTypes` and implement `onReceiveShare()` in their SubApp class.
+
+### Configuration System
+
+**ConfigService** (`lib/services/config_service.dart`): Two-layer configuration: user overrides (persistent) and defaults (in-memory). Sub-apps can define defaults in `onInit()` using `defineConfig()` and access values via `getConfig()`.
+
+### Shared Modules
+
+**LMS Module** (`lib/shared/lms/`): Shared domain models and services for learning management system features. Can be used across multiple sub-apps. Contains models for courses, lessons, activities, and storage services.
+
 ### UI Interaction Guidelines
 
 **List Item Actions**: Use swipe gestures (`Dismissible` widget) instead of popup menus for list item actions:

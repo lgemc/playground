@@ -7,9 +7,9 @@ import 'screens/chat_list_screen.dart';
 import 'services/chat_storage.dart';
 
 class ChatApp extends SubApp {
-  late final ChatStorage _storage;
+  ChatStorage? _storage;
 
-  ChatStorage get storage => _storage;
+  ChatStorage get storage => _storage!;
 
   @override
   String get id => 'chat';
@@ -25,18 +25,20 @@ class ChatApp extends SubApp {
 
   @override
   Future<void> onInit() async {
-    _storage = ChatStorage();
-    await _storage.init();
+    if (_storage == null) {
+      _storage = ChatStorage();
+      await _storage!.init();
+    }
   }
 
   @override
   Future<void> onDispose() async {
-    await _storage.dispose();
+    await _storage?.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return ChatListScreen(storage: _storage);
+    return ChatListScreen(storage: _storage!);
   }
 
   @override
@@ -57,7 +59,7 @@ class ChatApp extends SubApp {
           createdAt: now,
           updatedAt: now,
         );
-        await _storage.createChat(chat);
+        await _storage!.createChat(chat);
 
         final message = Message(
           id: '${chatId}_0',
@@ -66,7 +68,7 @@ class ChatApp extends SubApp {
           isUser: true,
           createdAt: now,
         );
-        await _storage.createMessage(message);
+        await _storage!.createMessage(message);
       }
     }
   }

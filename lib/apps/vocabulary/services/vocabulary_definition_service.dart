@@ -6,7 +6,7 @@ import '../../../services/logger.dart';
 import '../../../services/queue_service.dart';
 import '../../../services/queue_message.dart';
 import '../vocabulary_app.dart';
-import 'vocabulary_storage.dart';
+import 'vocabulary_storage_v2.dart';
 import 'vocabulary_streaming_service.dart';
 
 /// Service that listens to vocabulary queue and fetches definitions using LLM.
@@ -98,7 +98,7 @@ class VocabularyDefinitionService {
       }
 
       // Verify word still exists
-      final existingWord = await VocabularyStorage.instance.getWord(wordId);
+      final existingWord = await VocabularyStorageV2.instance.getWord(wordId);
       if (existingWord == null) {
         await _logger.warning(
           'Word no longer exists, skipping definition lookup',
@@ -112,7 +112,7 @@ class VocabularyDefinitionService {
       final result = await _fetchDefinition(wordText, wordId: wordId);
 
       if (result != null) {
-        await VocabularyStorage.instance.updateWordDefinition(
+        await VocabularyStorageV2.instance.updateWordDefinition(
           wordId,
           meaning: result.meaning,
           samplePhrases: result.samplePhrases,

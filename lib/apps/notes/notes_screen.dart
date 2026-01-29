@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/app_registry.dart';
 import 'models/note.dart';
 import 'note_editor_screen.dart';
-import 'services/notes_storage.dart';
+import 'services/notes_storage_v2.dart';
 import 'widgets/note_list_tile.dart';
 
 class NotesScreen extends StatefulWidget {
@@ -26,7 +26,7 @@ class _NotesScreenState extends State<NotesScreen> {
   Future<void> _loadNotes() async {
     setState(() => _isLoading = true);
     try {
-      final notes = await NotesStorage.instance.loadNotes();
+      final notes = await NotesStorageV2.instance.loadNotes();
       setState(() {
         _notes = notes;
         _isLoading = false;
@@ -63,7 +63,7 @@ class _NotesScreenState extends State<NotesScreen> {
 
   Future<void> _deleteNote(Note note) async {
     try {
-      await NotesStorage.instance.deleteNote(note.id);
+      await NotesStorageV2.instance.deleteNote(note.id);
       _loadNotes();
     } catch (e) {
       if (mounted) {
@@ -140,7 +140,7 @@ class _NotesScreenState extends State<NotesScreen> {
           return NoteListTile(
             note: note,
             onTap: () async {
-              final fullNote = await NotesStorage.instance.loadFullNote(note.id);
+              final fullNote = await NotesStorageV2.instance.loadFullNote(note.id);
               _openEditor(fullNote);
             },
             onDelete: () => _deleteNote(note),

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../models/chat.dart';
@@ -7,6 +8,9 @@ import 'package:uuid/uuid.dart';
 import '../../../core/app_bus.dart';
 import '../../../core/app_event.dart';
 import '../../../services/autocompletion_service.dart';
+import '../../../services/share_content.dart';
+import '../../../services/share_service.dart';
+import '../../../services/tool_service.dart';
 import '../theme/chat_theme.dart';
 
 class ChatDetailScreen extends StatefulWidget {
@@ -33,6 +37,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   late Chat _currentChat;
   bool _isGeneratingResponse = false;
   bool _hasUserSentMessage = false;
+  String? _selectedText;
 
   @override
   void initState() {
@@ -139,6 +144,20 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     await AppBus.instance.emit(event);
   }
 
+  Future<void> _shareText(String text) async {
+    final content = ShareContent.text(
+      sourceAppId: 'chat',
+      text: text,
+    );
+
+    final success = await ShareService.instance.share(context, content);
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Text shared successfully')),
+      );
+    }
+  }
+
   Future<void> _generateAIResponse() async {
     setState(() {
       _isGeneratingResponse = true;
@@ -176,40 +195,104 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       }
 
       try {
-        // Convert messages to ChatMessage format (exclude the placeholder)
-        final chatMessages = _messages.sublist(0, _messages.length - 1).map((msg) {
+        // Get registered tools
+        final tools = ToolService.instance.tools;
+
+        // Build conversation history for the LLM (exclude the placeholder)
+        List<ChatMessage> conversationHistory =
+            _messages.sublist(0, _messages.length - 1).map((msg) {
           return ChatMessage(
             role: msg.isUser ? MessageRole.user : MessageRole.assistant,
             content: msg.content,
           );
         }).toList();
 
-        final buffer = StringBuffer();
-        var chunkCount = 0;
+        // Tool calling loop - continue until LLM responds without tool calls
+        while (true) {
+          final buffer = StringBuffer();
+          final toolCalls = <ToolCallEvent>[];
 
-        await for (final chunk in autocompletionService.completeStream(chatMessages)) {
-          buffer.write(chunk);
-          chunkCount++;
+          await for (final event in autocompletionService.completeWithTools(
+            conversationHistory,
+            tools: tools.isNotEmpty ? tools : null,
+          )) {
+            if (event is ContentChunk) {
+              buffer.write(event.content);
 
-          // Update the message in real-time
-          final updatedMessage = aiMessage.copyWith(content: buffer.toString());
-          setState(() {
-            _messages[_messages.length - 1] = updatedMessage;
-          });
+              // Update the message in real-time
+              final updatedMessage =
+                  aiMessage.copyWith(content: buffer.toString());
+              setState(() {
+                _messages[_messages.length - 1] = updatedMessage;
+              });
 
-          _scrollToBottom();
+              _scrollToBottom();
+            } else if (event is ToolCallEvent) {
+              toolCalls.add(event);
+            }
+          }
+
+          // If no tool calls, we're done
+          if (toolCalls.isEmpty) {
+            final finalContent = buffer.toString();
+            print(
+                'AI Response completed - Length: ${finalContent.length} chars');
+
+            final finalMessage = aiMessage.copyWith(content: finalContent);
+            await widget.storage.createMessage(finalMessage);
+
+            setState(() {
+              _messages[_messages.length - 1] = finalMessage;
+              _isGeneratingResponse = false;
+            });
+
+            break;
+          }
+
+          // Execute tool calls and add results to conversation history
+          for (final toolCall in toolCalls) {
+            print('Executing tool: ${toolCall.name} with args: ${toolCall.arguments}');
+
+            final result = await ToolService.instance.execute(
+              toolCall.name,
+              toolCall.arguments,
+            );
+
+            print('Tool result: ${result.toJson()}');
+
+            // Add assistant message with tool call to history
+            conversationHistory.add(ChatMessage(
+              role: MessageRole.assistant,
+              content: buffer.toString(),
+              toolCalls: [
+                ChatToolCall(
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  arguments: toolCall.arguments,
+                )
+              ],
+            ));
+
+            // Add tool result to history
+            conversationHistory.add(ChatMessage(
+              role: MessageRole.tool,
+              toolCallId: toolCall.id,
+              content: jsonEncode(result.toJson()),
+            ));
+
+            // Update UI to show tool execution
+            final toolStatusMessage = aiMessage.copyWith(
+              content:
+                  '${buffer.toString()}\n\n_Executing ${toolCall.name}..._',
+            );
+            setState(() {
+              _messages[_messages.length - 1] = toolStatusMessage;
+            });
+          }
+
+          // Clear buffer for next iteration
+          buffer.clear();
         }
-
-        final finalContent = buffer.toString();
-        print('AI Response completed - Chunks: $chunkCount, Length: ${finalContent.length} chars');
-
-        final finalMessage = aiMessage.copyWith(content: finalContent);
-        await widget.storage.createMessage(finalMessage);
-
-        setState(() {
-          _messages[_messages.length - 1] = finalMessage;
-          _isGeneratingResponse = false;
-        });
 
         final updatedChat = _currentChat.copyWith(updatedAt: DateTime.now());
         await widget.storage.updateChat(updatedChat);
@@ -291,17 +374,39 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       ),
                     ),
                   )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _messages.length + (_isGeneratingResponse ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == _messages.length && _isGeneratingResponse) {
-                        return _buildLoadingBubble();
-                      }
-                      final message = _messages[index];
-                      return _buildMessageBubble(message);
+                : SelectionArea(
+                    onSelectionChanged: (value) {
+                      _selectedText = value?.plainText;
                     },
+                    contextMenuBuilder: (context, selectableRegionState) {
+                      return AdaptiveTextSelectionToolbar.buttonItems(
+                        anchors: selectableRegionState.contextMenuAnchors,
+                        buttonItems: [
+                          ...selectableRegionState.contextMenuButtonItems,
+                          ContextMenuButtonItem(
+                            label: 'Share',
+                            onPressed: () {
+                              if (_selectedText != null && _selectedText!.isNotEmpty) {
+                                selectableRegionState.hideToolbar();
+                                _shareText(_selectedText!);
+                              }
+                            },
+                          ),
+                        ],
+                      );
+                    },
+                    child: ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _messages.length + (_isGeneratingResponse ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (index == _messages.length && _isGeneratingResponse) {
+                          return _buildLoadingBubble();
+                        }
+                        final message = _messages[index];
+                        return _buildMessageBubble(message);
+                      },
+                    ),
                   ),
           ),
           _buildMessageInput(),
@@ -330,7 +435,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
         child: MarkdownBody(
           data: message.content,
-          selectable: true,
           shrinkWrap: true,
           styleSheet: isUser ? ChatTheme.userMarkdownStyle : ChatTheme.aiMarkdownStyle,
         ),

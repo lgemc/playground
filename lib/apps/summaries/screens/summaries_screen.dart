@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/summary.dart';
-import '../services/summary_storage.dart';
+import '../services/summary_storage_v2.dart';
 import 'summary_detail_screen.dart';
 import '../widgets/summary_list_tile.dart';
 
@@ -12,7 +12,7 @@ class SummariesScreen extends StatefulWidget {
 }
 
 class _SummariesScreenState extends State<SummariesScreen> {
-  final _storage = SummaryStorage.instance;
+  final _storage = SummaryStorageV2.instance;
   List<Summary> _summaries = [];
   bool _isLoading = true;
 
