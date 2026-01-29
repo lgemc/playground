@@ -49,7 +49,10 @@ class _SubAppWrapper extends StatelessWidget {
   Widget build(BuildContext context) {
     return Theme(
       data: Theme.of(context).copyWith(
-        colorScheme: ColorScheme.fromSeed(seedColor: app.themeColor),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: app.themeColor,
+          brightness: Theme.of(context).brightness,
+        ),
       ),
       child: app.build(context),
     );

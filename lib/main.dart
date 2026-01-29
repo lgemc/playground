@@ -3,6 +3,7 @@ import 'core/app_registry.dart';
 import 'core/sub_app.dart';
 import 'apps/launcher/launcher_app.dart';
 import 'apps/launcher/launcher_screen.dart';
+import 'apps/notes/notes_app.dart';
 
 void main() {
   _registerApps();
@@ -23,12 +24,7 @@ void _registerApps() {
     themeColor: Colors.grey,
   ));
 
-  registry.register(_DemoApp(
-    id: 'notes',
-    name: 'Notes',
-    icon: Icons.note,
-    themeColor: Colors.amber,
-  ));
+  registry.register(NotesApp());
 
   registry.register(_DemoApp(
     id: 'calculator',
