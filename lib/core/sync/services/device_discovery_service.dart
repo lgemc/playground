@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import '../models/device.dart';
@@ -17,7 +18,6 @@ class DeviceDiscoveryService {
 
   RawDatagramSocket? _listenSocket;  // For receiving broadcasts
   RawDatagramSocket? _sendSocket;    // For sending broadcasts (unused on Android)
-  ServerSocket? _syncSocket;
 
   final _devicesController = StreamController<List<Device>>.broadcast();
   final Map<String, Device> _discoveredDevices = {};
@@ -45,8 +45,11 @@ class DeviceDiscoveryService {
           await _multicastChannel.invokeMethod('acquire');
           _multicastLockAcquired = true;
           print('Multicast lock acquired on Android');
+          // Small delay to ensure lock is fully active
+          await Future.delayed(const Duration(milliseconds: 100));
         } catch (e) {
           print('Failed to acquire multicast lock: $e');
+          rethrow;
         }
       }
 
@@ -62,17 +65,22 @@ class DeviceDiscoveryService {
 
       // Create separate sockets for listening and sending
       // Listen socket: bound to discovery port, reuses address for multiple instances
-      // Note: reusePort can cause packet distribution issues on Linux
-      // Using reuseAddress only to allow quick rebind after restart
+      // On Android, we need reusePort: true to enable broadcast sending
       _listenSocket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         _discoveryPort,
         reuseAddress: true,
-        reusePort: false,  // Disabled to ensure all broadcasts are received
+        reusePort: Platform.isAndroid,  // Enable on Android for broadcast support
       );
 
       _listenSocket!.broadcastEnabled = true;
       print('Listen socket bound to ${_listenSocket!.address.address}:${_listenSocket!.port}, broadcast enabled: ${_listenSocket!.broadcastEnabled}');
+
+      // On Android, use the listen socket for sending too
+      if (Platform.isAndroid) {
+        _sendSocket = _listenSocket;
+        print('Android: Using listen socket for both send and receive');
+      }
 
       // Listen for all broadcast messages (both discovery requests and announcements)
       _listenSocket!.listen((event) async {
@@ -107,31 +115,26 @@ class DeviceDiscoveryService {
         }
       });
 
-      // Send socket: Use ephemeral port (0) for all platforms
-      final sendPort = 0;
+      // Send socket: Only create separate socket on non-Android platforms
+      if (!Platform.isAndroid) {
+        final sendPort = 0;
 
-      _sendSocket = await RawDatagramSocket.bind(
-        InternetAddress.anyIPv4,
-        sendPort,
-        reuseAddress: true,
-      );
+        _sendSocket = await RawDatagramSocket.bind(
+          InternetAddress.anyIPv4,
+          sendPort,
+          reuseAddress: true,
+        );
 
-      // Enable broadcast AFTER binding
-      _sendSocket!.broadcastEnabled = true;
+        // Enable broadcast AFTER binding
+        _sendSocket!.broadcastEnabled = true;
 
-      // Verify broadcast is enabled
-      if (!_sendSocket!.broadcastEnabled) {
-        print('WARNING: Broadcast could not be enabled on send socket!');
+        // Verify broadcast is enabled
+        if (!_sendSocket!.broadcastEnabled) {
+          print('WARNING: Broadcast could not be enabled on send socket!');
+        }
+
+        print('Send socket bound to ${_sendSocket!.address.address}:${_sendSocket!.port}, broadcast: ${_sendSocket!.broadcastEnabled}');
       }
-
-      print('Send socket bound to ${_sendSocket!.address.address}:${_sendSocket!.port}, broadcast: ${_sendSocket!.broadcastEnabled}');
-
-      // Start sync server
-      _syncSocket = await ServerSocket.bind(
-        InternetAddress.anyIPv4,
-        _syncPort,
-        shared: true,
-      );
 
       print('Advertising device: $myDeviceName ($myDeviceId) at $myIpAddress:$_syncPort');
 
@@ -150,12 +153,6 @@ class DeviceDiscoveryService {
 
   void _sendAdvertisement(String deviceId, String deviceName, String ipAddress) {
     try {
-      // Check if socket is still valid
-      if (_sendSocket == null) {
-        print('Send socket is null, cannot send advertisement');
-        return;
-      }
-
       final announcement = jsonEncode({
         'type': 'device_announcement',
         'deviceId': deviceId,
@@ -167,59 +164,71 @@ class DeviceDiscoveryService {
 
       final data = utf8.encode(announcement);
 
-      // Use send socket for all platforms
-      // The listen socket on Android can't send (Operation not permitted)
-      final socketToUse = _sendSocket;
-
-      // Verify socket is valid
-      if (socketToUse == null) {
-        print('ERROR: Socket is null!');
-        return;
-      }
-
-      // Send to both broadcast addresses to ensure delivery
-      // 255.255.255.255 - limited broadcast
-      int? bytes1;
-      try {
-        bytes1 = socketToUse.send(
-          data,
-          InternetAddress('255.255.255.255'),
-          _discoveryPort,
-        );
-        if (bytes1 == 0) {
-          print('ERROR: Failed to send to 255.255.255.255 - returned $bytes1 bytes');
+      if (Platform.isAndroid) {
+        // Use native Android method for broadcasting
+        _sendBroadcastNative(data, '255.255.255.255');
+        final subnetBroadcast = _getSubnetBroadcast(ipAddress);
+        if (subnetBroadcast != null) {
+          _sendBroadcastNative(data, subnetBroadcast);
         }
-      } catch (e) {
-        print('ERROR sending to 255.255.255.255: $e');
-      }
+      } else {
+        // Use Dart socket for non-Android platforms
+        if (_sendSocket == null) {
+          print('Send socket is null, cannot send advertisement');
+          return;
+        }
 
-      // Subnet broadcast (e.g., 192.168.0.255 for 192.168.0.x)
-      final subnetBroadcast = _getSubnetBroadcast(ipAddress);
-      int? bytes2;
-      if (subnetBroadcast != null) {
+        final socketToUse = _sendSocket!;
+
+        // Send to both broadcast addresses
+        int? bytes1;
         try {
-          bytes2 = socketToUse.send(
+          bytes1 = socketToUse.send(
             data,
-            InternetAddress(subnetBroadcast),
+            InternetAddress('255.255.255.255'),
             _discoveryPort,
           );
-          if (bytes2 == 0) {
-            print('ERROR: Failed to send to $subnetBroadcast - returned $bytes2 bytes');
+          if (bytes1 == 0) {
+            print('ERROR: Failed to send to 255.255.255.255 - returned $bytes1 bytes');
           }
         } catch (e) {
-          print('ERROR sending to $subnetBroadcast: $e');
+          print('ERROR sending to 255.255.255.255: $e');
         }
-      }
 
-      print('Sent advertisement: $bytes1 bytes to 255.255.255.255:$_discoveryPort, $bytes2 bytes to $subnetBroadcast:$_discoveryPort');
+        final subnetBroadcast = _getSubnetBroadcast(ipAddress);
+        int? bytes2;
+        if (subnetBroadcast != null) {
+          try {
+            bytes2 = socketToUse.send(
+              data,
+              InternetAddress(subnetBroadcast),
+              _discoveryPort,
+            );
+            if (bytes2 == 0) {
+              print('ERROR: Failed to send to $subnetBroadcast - returned $bytes2 bytes');
+            }
+          } catch (e) {
+            print('ERROR sending to $subnetBroadcast: $e');
+          }
+        }
+
+        print('Sent advertisement: $bytes1 bytes to 255.255.255.255:$_discoveryPort, $bytes2 bytes to $subnetBroadcast:$_discoveryPort');
+      }
     } catch (e) {
       print('Error sending advertisement: $e');
-      // On Android, if app is backgrounded, socket may become invalid
-      // Cancel timer to prevent repeated errors
-      if (Platform.isAndroid && e.toString().contains('Operation not permitted')) {
-        _broadcastTimer?.cancel();
-        _broadcastTimer = null;
-      }
+    }
+  }
+
+  void _sendBroadcastNative(List<int> data, String address) async {
+    try {
+      final bytes = await _multicastChannel.invokeMethod<int>('sendBroadcast', {
+        'data': Uint8List.fromList(data),
+        'address': address,
+        'port': _discoveryPort,
+      });
+      print('Sent $bytes bytes to $address:$_discoveryPort via native');
+    } catch (e) {
+      print('ERROR sending native broadcast to $address: $e');
     }
   }
 
@@ -238,8 +247,13 @@ class DeviceDiscoveryService {
     _broadcastTimer = null;
     _listenSocket?.close();
     _listenSocket = null;
-    _sendSocket?.close();
+
+    // On Android, _sendSocket is the same as _listenSocket, so don't close it again
+    if (!Platform.isAndroid) {
+      _sendSocket?.close();
+    }
     _sendSocket = null;
+
     await _syncSocket?.close();
     _syncSocket = null;
 

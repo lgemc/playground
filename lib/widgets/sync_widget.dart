@@ -75,6 +75,9 @@ class _SyncWidgetState extends State<SyncWidget> {
     });
 
     try {
+      print('[SyncWidget] Attempting to sync with device: ${device.name}');
+      print('[SyncWidget] Device IP: ${device.ipAddress}, Port: ${device.port}');
+
       final result = await syncService.syncApp(widget.appId, device);
 
       if (mounted) {
@@ -98,7 +101,9 @@ class _SyncWidgetState extends State<SyncWidget> {
           );
         }
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('[SyncWidget] Sync error: $e');
+      print('[SyncWidget] Stack trace: $stackTrace');
       if (mounted) {
         setState(() {
           _isSyncing = false;
