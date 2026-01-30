@@ -36,9 +36,10 @@ class MainActivity : FlutterActivity() {
                         wifiLock?.setReferenceCounted(false)
                         wifiLock?.acquire()
 
-                        // Create a dedicated broadcast socket
-                        broadcastSocket = DatagramSocket()
+                        // Create a dedicated broadcast socket bound to ephemeral port
+                        broadcastSocket = DatagramSocket(0)  // 0 = any available port
                         broadcastSocket?.broadcast = true
+                        broadcastSocket?.reuseAddress = true
 
                         result.success(true)
                     } catch (e: Exception) {

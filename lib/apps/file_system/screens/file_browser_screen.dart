@@ -10,6 +10,7 @@ import '../widgets/folder_breadcrumb.dart';
 import 'favorites_screen.dart';
 import 'search_screen.dart';
 import 'pdf_reader_screen.dart';
+import 'file_derivatives_screen.dart';
 import '../widgets/folder_picker_dialog.dart';
 import '../../../services/share_service.dart';
 import '../../../services/share_content.dart';
@@ -29,6 +30,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   bool _isLoading = false;
   int _selectedTab = 0;
   List<FileSystemEntity> _sharedFiles = [];
+  final Map<String, bool> _fileHasDerivatives = {};
 
   @override
   void initState() {
@@ -76,6 +78,15 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     try {
       final folders = await FileSystemStorage.instance.getFoldersInPath(_currentPath);
       final files = await FileSystemStorage.instance.getFilesInFolder(_currentPath);
+
+      // Check derivatives for each file
+      _fileHasDerivatives.clear();
+      for (final file in files) {
+        final hasDerivatives =
+            await FileSystemStorage.instance.hasDerivatives(file.id);
+        _fileHasDerivatives[file.id] = hasDerivatives;
+      }
+
       setState(() {
         _folders = folders;
         _files = files;
@@ -161,6 +172,19 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
               Navigator.pop(context);
               await FileSystemStorage.instance.toggleFavorite(file.id);
               _loadContents();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.auto_awesome),
+            title: const Text('Generate Derivatives'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => FileDerivativesScreen(file: file),
+                ),
+              );
             },
           ),
           ListTile(
@@ -302,7 +326,28 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     await ShareService.instance.share(context, content);
   }
 
-  void _openFile(FileItem file) {
+  Future<void> _openFile(FileItem file) async {
+    // Check if file has derivatives
+    final hasDerivatives =
+        await FileSystemStorage.instance.hasDerivatives(file.id);
+
+    if (hasDerivatives) {
+      // Navigate to derivatives view
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => FileDerivativesScreen(file: file),
+          ),
+        );
+      }
+    } else {
+      // Open file directly (existing behavior)
+      _openFileDirect(file);
+    }
+  }
+
+  void _openFileDirect(FileItem file) {
     // Check if it's a PDF file
     if (file.extension.toLowerCase() == 'pdf') {
       Navigator.push(
@@ -445,6 +490,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                             file: file,
                             onTap: () => _openFile(file),
                             onLongPress: () => _showFileContextMenu(file),
+                            hasDerivatives: _fileHasDerivatives[file.id] ?? false,
                           );
                         }
                       },

@@ -110,7 +110,8 @@ class ActivityListTile extends StatelessWidget {
   }
 
   Future<String?> _getFileName(ResourceFileActivity activity) async {
-    final file = await FileSystemBridge.instance.getFileById(activity.fileId);
+    if (activity.fileId == null) return null;
+    final file = await FileSystemBridge.instance.getFileById(activity.fileId!);
     return file?.name;
   }
 }

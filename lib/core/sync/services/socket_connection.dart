@@ -60,7 +60,10 @@ class SocketConnectionService implements ConnectionService {
   final StreamController<SyncConnection> _incomingController =
       StreamController<SyncConnection>.broadcast();
 
-  final Map<String, SocketConnection> _activeConnections = {};
+  final Map<String, SyncConnection> _activeConnections = {};
+
+  String? _myDeviceId;
+  String? _myDeviceName;
 
   @override
   Future<void> startListening(int port) async {
@@ -79,70 +82,30 @@ class SocketConnectionService implements ConnectionService {
   }
 
   void _handleIncomingConnection(Socket socket) {
-    // Buffer for receiving device info
-    final buffer = <int>[];
-    late StreamSubscription subscription;
-
-    subscription = socket.listen(
-      (data) {
-        buffer.addAll(data);
-
-        // Check if we received the handshake (newline-terminated JSON)
-        final index = buffer.indexOf(10); // '\n'
-        if (index != -1) {
-          // Parse device info
-          final json = String.fromCharCodes(buffer.sublist(0, index));
-          subscription.cancel();
-
-          try {
-            final deviceData = _parseDeviceInfo(json);
-            final device = Device(
-              id: deviceData['id'] as String,
-              name: deviceData['name'] as String,
-              type: deviceData['type'] as String,
-              ipAddress: socket.remoteAddress.address,
-              port: deviceData['port'] != null ? int.tryParse(deviceData['port'] as String) : null,
-            );
-
-            final connection = SocketConnection(socket, device);
-            _activeConnections[device.id] = connection;
-            _incomingController.add(connection);
-
-            // Send handshake response
-            socket.writeln('OK');
-          } catch (e) {
-            socket.close();
-          }
-        }
-      },
-      onError: (error) {
-        subscription.cancel();
-        socket.close();
-      },
-      cancelOnError: true,
+    // Create a placeholder device - will be identified via sync protocol handshake
+    final device = Device(
+      id: 'unknown-${socket.remoteAddress.address}',
+      name: 'Unknown Device',
+      type: 'unknown',
+      ipAddress: socket.remoteAddress.address,
+      port: socket.remotePort,
     );
-  }
 
-  Map<String, dynamic> _parseDeviceInfo(String json) {
-    // Simple JSON parsing for device info
-    // In production, use dart:convert
-    final result = <String, dynamic>{};
-    final cleaned = json.trim().replaceAll('{', '').replaceAll('}', '');
-    for (final pair in cleaned.split(',')) {
-      final parts = pair.split(':');
-      if (parts.length == 2) {
-        final key = parts[0].trim().replaceAll('"', '');
-        final value = parts[1].trim().replaceAll('"', '');
-        result[key] = value;
-      }
-    }
-    return result;
+    // Create connection immediately - no socket-level handshake needed
+    final connection = SocketConnection(socket, device);
+    _incomingController.add(connection);
   }
 
   @override
   Future<void> stopListening() async {
     await _serverSocket?.close();
     _serverSocket = null;
+  }
+
+  /// Set this device's identity for handshakes
+  void setDeviceInfo(String deviceId, String deviceName) {
+    _myDeviceId = deviceId;
+    _myDeviceName = deviceName;
   }
 
   @override
@@ -159,45 +122,18 @@ class SocketConnectionService implements ConnectionService {
       throw ArgumentError('Device must have ipAddress and port');
     }
 
-    // Connect via TCP
+    if (_myDeviceId == null || _myDeviceName == null) {
+      throw StateError('Device info not set. Call setDeviceInfo() first.');
+    }
+
+    // Connect via TCP with extended timeout
     final socket = await Socket.connect(
       device.ipAddress!,
       device.port!,
       timeout: const Duration(seconds: 10),
     );
 
-    // Send device handshake including port for future reconnections
-    final handshake = '{"id":"${device.id}","name":"${device.name}","type":"${device.type}","port":"${device.port}"}';
-    socket.writeln(handshake);
-
-    // Wait for acknowledgment
-    final completer = Completer<void>();
-    late StreamSubscription subscription;
-
-    subscription = socket.listen(
-      (data) {
-        final response = String.fromCharCodes(data).trim();
-        if (response == 'OK') {
-          subscription.cancel();
-          completer.complete();
-        }
-      },
-      onError: (error) {
-        subscription.cancel();
-        if (!completer.isCompleted) {
-          completer.completeError(error);
-        }
-      },
-      cancelOnError: true,
-    );
-
-    try {
-      await completer.future.timeout(const Duration(seconds: 5));
-    } catch (e) {
-      await socket.close();
-      rethrow;
-    }
-
+    // Create connection immediately - handshake happens at protocol level
     final connection = SocketConnection(socket, device);
     _activeConnections[device.id] = connection;
 
@@ -220,3 +156,4 @@ class SocketConnectionService implements ConnectionService {
     await _incomingController.close();
   }
 }
+

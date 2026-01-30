@@ -18,8 +18,9 @@ import 'apps/vocabulary/services/vocabulary_definition_service.dart';
 import 'apps/chat/chat_app.dart';
 import 'apps/chat/services/chat_title_service.dart';
 import 'apps/file_system/file_system_app.dart';
-import 'apps/summaries/summaries_app.dart';
-import 'services/summarizer_service.dart';
+import 'services/derivative_service.dart';
+import 'services/derivative_queue_consumer.dart';
+import 'services/generators/summary_generator.dart';
 import 'core/app_bus.dart';
 import 'apps/lms/creator/lms_creator_app.dart';
 import 'apps/lms/viewer/lms_viewer_app.dart';
@@ -43,11 +44,20 @@ void main() async {
   await AppBus.instance.init();
   await QueueService.instance.init();
   await VocabularyDefinitionService.instance.init();
-  await SummarizerService.instance.init();
+  _initDerivativeService();
   await _initSyncService();
   _registerApps();
   await _registerEventHandlers();
   runApp(const PlaygroundApp());
+}
+
+void _initDerivativeService() {
+  // Register generators
+  DerivativeService.instance.registerGenerator(SummaryGenerator());
+
+  // Start the consumer
+  final consumer = DerivativeQueueConsumer();
+  consumer.start();
 }
 
 void _registerApps() {
@@ -64,7 +74,6 @@ void _registerApps() {
   registry.register(LogsApp());
   registry.register(QueuesApp());
   registry.register(FileSystemApp());
-  registry.register(SummariesApp());
   registry.register(LmsCreatorApp());
   registry.register(LmsViewerApp());
 

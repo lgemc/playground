@@ -98,13 +98,6 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
-    if (_fileId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a resource file')),
-      );
-      return;
-    }
-
     setState(() => _isLoading = true);
 
     try {
@@ -133,7 +126,7 @@ class _ActivityFormScreenState extends State<ActivityFormScreen> {
                   ? null
                   : _descriptionController.text.trim(),
               order: subSection.activities.length,
-              fileId: _fileId!,
+              fileId: _fileId,
               resourceType: _resourceType,
             );
 

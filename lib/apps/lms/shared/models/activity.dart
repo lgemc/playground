@@ -58,7 +58,7 @@ abstract class Activity {
 }
 
 class ResourceFileActivity extends Activity {
-  final String fileId;
+  final String? fileId;
   final ResourceType resourceType;
 
   ResourceFileActivity({
@@ -68,7 +68,7 @@ class ResourceFileActivity extends Activity {
     super.description,
     required super.createdAt,
     required super.order,
-    required this.fileId,
+    this.fileId,
     required this.resourceType,
   }) : super(type: ActivityType.resourceFile);
 
@@ -77,7 +77,7 @@ class ResourceFileActivity extends Activity {
     required String name,
     String? description,
     required int order,
-    required String fileId,
+    String? fileId,
     required ResourceType resourceType,
   }) {
     final now = DateTime.now();
@@ -116,7 +116,7 @@ class ResourceFileActivity extends Activity {
       description: json['description'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
       order: json['order'] as int,
-      fileId: json['fileId'] as String,
+      fileId: json['fileId'] as String?,
       resourceType: ResourceType.values.firstWhere(
         (t) => t.name == json['resourceType'],
         orElse: () => ResourceType.other,

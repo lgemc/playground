@@ -167,6 +167,14 @@ class QueueConfigs {
       maxRetries: 3,
       lockTimeoutSeconds: 60, // AI calls can take time
     ),
+    // Queue for derivative artifact generation
+    QueueConfig(
+      id: 'derivative-processor',
+      name: 'Derivative Processor',
+      eventPatterns: ['derivative.create'],
+      maxRetries: 3,
+      lockTimeoutSeconds: 120, // Derivatives can take longer
+    ),
     // Catch-all queue for unmatched events (disabled by default)
     QueueConfig(
       id: 'default-queue',

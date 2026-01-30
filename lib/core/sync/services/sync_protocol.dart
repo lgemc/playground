@@ -131,10 +131,10 @@ class SyncProtocol {
       },
     ));
 
-    // Wait for acknowledgment
+    // Wait for acknowledgment with extended timeout
     final ack = await messages
         .firstWhere((msg) => msg.type == SyncMessageType.handshakeAck)
-        .timeout(const Duration(seconds: 10));
+        .timeout(const Duration(seconds: 30));
 
     if (ack.payload['status'] != 'ok') {
       throw Exception('Handshake failed: ${ack.payload['error']}');
@@ -174,10 +174,10 @@ class SyncProtocol {
         },
       ));
 
-      // Wait for acknowledgment
+      // Wait for acknowledgment with extended timeout
       await messages
           .firstWhere((msg) => msg.type == SyncMessageType.syncAck)
-          .timeout(const Duration(seconds: 30));
+          .timeout(const Duration(seconds: 60));
     }
   }
 

@@ -44,8 +44,17 @@ class _ViewerSubSectionScreenState extends State<ViewerSubSectionScreen> {
 
   Future<void> _openActivity(Activity activity) async {
     if (activity is ResourceFileActivity) {
+      if (activity.fileId == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No file attached to this activity')),
+          );
+        }
+        return;
+      }
+
       try {
-        final filePath = await FileSystemBridge.instance.getFilePathById(activity.fileId);
+        final filePath = await FileSystemBridge.instance.getFilePathById(activity.fileId!);
         if (filePath != null) {
           final uri = Uri.file(filePath);
           if (await canLaunchUrl(uri)) {

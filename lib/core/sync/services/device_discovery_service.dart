@@ -254,9 +254,6 @@ class DeviceDiscoveryService {
     }
     _sendSocket = null;
 
-    await _syncSocket?.close();
-    _syncSocket = null;
-
     // Release multicast lock on Android
     if (Platform.isAndroid && _multicastLockAcquired) {
       try {
@@ -289,17 +286,26 @@ class DeviceDiscoveryService {
 
   Future<void> _sendDiscoveryRequest() async {
     try {
+      final myDeviceId = await _deviceIdService.getDeviceId();
+
       final request = jsonEncode({
         'type': 'discovery_request',
+        'deviceId': myDeviceId,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       });
 
       final data = utf8.encode(request);
-      _sendSocket?.send(
-        data,
-        InternetAddress('255.255.255.255'),
-        _discoveryPort,
-      );
+
+      if (_sendSocket != null) {
+        _sendSocket!.send(
+          data,
+          InternetAddress('255.255.255.255'),
+          _discoveryPort,
+        );
+        print('Sent discovery request from $myDeviceId');
+      } else {
+        print('WARNING: Cannot send discovery request - send socket is null');
+      }
     } catch (e) {
       print('Error sending discovery request: $e');
     }

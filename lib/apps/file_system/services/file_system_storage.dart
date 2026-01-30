@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:mime/mime.dart';
 import '../models/file_item.dart';
 import '../models/folder_item.dart';
+import '../models/derivative_artifact.dart';
 
 class FileSystemStorage {
   static final instance = FileSystemStorage._();
@@ -12,6 +13,7 @@ class FileSystemStorage {
 
   Database? _db;
   Directory? _storageDir;
+  Directory? _derivativesDir;
 
   Database get db {
     if (_db == null) {
@@ -35,10 +37,13 @@ class FileSystemStorage {
     _storageDir = Directory(p.join(dataDir.path, 'storage'));
     await _storageDir!.create(recursive: true);
 
+    _derivativesDir = Directory(p.join(dataDir.path, 'derivatives'));
+    await _derivativesDir!.create(recursive: true);
+
     final dbPath = p.join(dataDir.path, 'file_system.db');
     _db = await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE files (
@@ -63,8 +68,159 @@ class FileSystemStorage {
         await db.execute(
           'CREATE INDEX idx_files_name ON files(name COLLATE NOCASE)',
         );
+
+        await db.execute('''
+          CREATE TABLE derivatives (
+            id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            derivative_path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            error_message TEXT,
+            FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
+          )
+        ''');
+
+        await db.execute(
+          'CREATE INDEX idx_derivatives_file_id ON derivatives(file_id)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_derivatives_status ON derivatives(status)',
+        );
+
+        await db.execute('''
+          CREATE TABLE migration_status (
+            id TEXT PRIMARY KEY,
+            completed_at TEXT NOT NULL
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('''
+            CREATE TABLE derivatives (
+              id TEXT PRIMARY KEY,
+              file_id TEXT NOT NULL,
+              type TEXT NOT NULL,
+              derivative_path TEXT NOT NULL,
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              completed_at TEXT,
+              error_message TEXT,
+              FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
+            )
+          ''');
+
+          await db.execute(
+            'CREATE INDEX idx_derivatives_file_id ON derivatives(file_id)',
+          );
+          await db.execute(
+            'CREATE INDEX idx_derivatives_status ON derivatives(status)',
+          );
+
+          await db.execute('''
+            CREATE TABLE migration_status (
+              id TEXT PRIMARY KEY,
+              completed_at TEXT NOT NULL
+            )
+          ''');
+
+          // Run migration from summaries app
+          await _migrateSummariesToDerivatives(appDir, db);
+        }
       },
     );
+  }
+
+  Future<void> _migrateSummariesToDerivatives(
+    Directory appDir,
+    Database db,
+  ) async {
+    try {
+      // Check if migration already ran
+      final migrationCheck = await db.query(
+        'migration_status',
+        where: 'id = ?',
+        whereArgs: ['summaries_to_derivatives'],
+      );
+
+      if (migrationCheck.isNotEmpty) {
+        return; // Already migrated
+      }
+
+      // Open summaries database
+      final summariesDbPath =
+          p.join(appDir.path, 'data', 'summaries', 'summaries.db');
+      final summariesDbFile = File(summariesDbPath);
+
+      if (!await summariesDbFile.exists()) {
+        // No summaries to migrate
+        await db.insert('migration_status', {
+          'id': 'summaries_to_derivatives',
+          'completed_at': DateTime.now().toIso8601String(),
+        });
+        return;
+      }
+
+      final summariesDb = await openDatabase(summariesDbPath);
+
+      try {
+        // Get all summaries
+        final summaries = await summariesDb.query('summaries');
+
+        for (final summary in summaries) {
+          final fileId = summary['file_id'] as String;
+          final status = summary['status'] as String;
+          final createdAt = summary['created_at'] as String;
+          final completedAt = summary['completed_at'] as String?;
+          final errorMessage = summary['error_message'] as String?;
+          final summaryId = summary['id'] as String;
+
+          // Create derivative record
+          final derivativeId = summaryId;
+          final derivativePath =
+              p.join(_derivativesDir!.path, '$derivativeId.md');
+
+          await db.insert('derivatives', {
+            'id': derivativeId,
+            'file_id': fileId,
+            'type': 'summary',
+            'derivative_path': derivativePath,
+            'status': status,
+            'created_at': createdAt,
+            'completed_at': completedAt,
+            'error_message': errorMessage,
+          });
+
+          // Copy summary file if it exists
+          final oldSummaryPath = p.join(
+            appDir.path,
+            'data',
+            'summaries',
+            'summaries',
+            '$summaryId.md',
+          );
+          final oldFile = File(oldSummaryPath);
+
+          if (await oldFile.exists()) {
+            await oldFile.copy(derivativePath);
+          }
+        }
+      } finally {
+        await summariesDb.close();
+      }
+
+      // Mark migration as complete
+      await db.insert('migration_status', {
+        'id': 'summaries_to_derivatives',
+        'completed_at': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      // Log error but don't fail initialization
+      print('Error migrating summaries: $e');
+    }
   }
 
   // === File Operations ===
@@ -337,6 +493,136 @@ class FileSystemStorage {
 
   String getAbsolutePath(FileItem file) {
     return p.join(storageDir.path, file.relativePath);
+  }
+
+  // === Derivative Operations ===
+
+  Future<List<DerivativeArtifact>> getDerivatives(String fileId) async {
+    final results = await db.query(
+      'derivatives',
+      where: 'file_id = ?',
+      whereArgs: [fileId],
+      orderBy: 'created_at DESC',
+    );
+
+    return results.map((m) => DerivativeArtifact.fromJson(m)).toList();
+  }
+
+  Future<DerivativeArtifact> createDerivative(
+    String fileId,
+    String type,
+  ) async {
+    final now = DateTime.now();
+    final id = '${now.millisecondsSinceEpoch}_${fileId.hashCode}_$type';
+    final derivativePath = p.join(_derivativesDir!.path, '$id.md');
+
+    final derivative = DerivativeArtifact(
+      id: id,
+      fileId: fileId,
+      type: type,
+      derivativePath: derivativePath,
+      status: 'pending',
+      createdAt: now,
+    );
+
+    await db.insert('derivatives', derivative.toJson());
+
+    return derivative;
+  }
+
+  Future<void> updateDerivative(
+    String id, {
+    String? status,
+    String? errorMessage,
+  }) async {
+    final updates = <String, dynamic>{};
+
+    if (status != null) {
+      updates['status'] = status;
+      if (status == 'completed') {
+        updates['completed_at'] = DateTime.now().toIso8601String();
+      }
+    }
+
+    if (errorMessage != null) {
+      updates['error_message'] = errorMessage;
+    }
+
+    if (updates.isNotEmpty) {
+      await db.update(
+        'derivatives',
+        updates,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
+  Future<void> deleteDerivative(String id) async {
+    // Get derivative info
+    final results = await db.query(
+      'derivatives',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    if (results.isEmpty) return;
+
+    final derivative = DerivativeArtifact.fromJson(results.first);
+
+    // Delete file if it exists
+    final file = File(derivative.derivativePath);
+    if (file.existsSync()) {
+      await file.delete();
+    }
+
+    // Delete from database
+    await db.delete('derivatives', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<bool> hasDerivatives(String fileId) async {
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM derivatives WHERE file_id = ?',
+      [fileId],
+    );
+
+    final count = result.first['count'] as int;
+    return count > 0;
+  }
+
+  Future<DerivativeArtifact?> getDerivative(String id) async {
+    final results = await db.query(
+      'derivatives',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    if (results.isEmpty) return null;
+    return DerivativeArtifact.fromJson(results.first);
+  }
+
+  Future<String> getDerivativeContent(String id) async {
+    final derivative = await getDerivative(id);
+    if (derivative == null) {
+      throw Exception('Derivative not found');
+    }
+
+    final file = File(derivative.derivativePath);
+    if (!file.existsSync()) {
+      return '';
+    }
+
+    return await file.readAsString();
+  }
+
+  Future<void> setDerivativeContent(String id, String content) async {
+    final derivative = await getDerivative(id);
+    if (derivative == null) {
+      throw Exception('Derivative not found');
+    }
+
+    final file = File(derivative.derivativePath);
+    await file.writeAsString(content);
   }
 
   Future<void> close() async {

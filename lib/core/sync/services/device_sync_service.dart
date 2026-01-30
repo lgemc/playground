@@ -56,6 +56,15 @@ class DeviceSyncService {
 
   /// Start the sync service (discovery and listening for connections)
   Future<void> start() async {
+    // Get this device's info
+    final myDeviceId = await _deviceIdService.getDeviceId();
+    final myDeviceName = await _deviceIdService.getDeviceName();
+
+    // Set device info for connection service if it's SocketConnectionService
+    if (_connectionService is SocketConnectionService) {
+      (_connectionService as SocketConnectionService).setDeviceInfo(myDeviceId, myDeviceName);
+    }
+
     // Start listening for incoming connections
     await _connectionService.startListening(7654);
 
@@ -188,10 +197,10 @@ class DeviceSyncService {
     try {
       final protocol = SyncProtocol(connection);
 
-      // Wait for handshake
+      // Wait for handshake with extended timeout
       await protocol.messages
           .firstWhere((msg) => msg.type == SyncMessageType.handshake)
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 30));
 
       // Send acknowledgment
       await protocol.send(SyncMessage(
