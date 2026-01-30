@@ -1,17 +1,15 @@
-import 'dart:async';
-
 import '../../../services/autocompletion_service.dart';
 import '../../../services/config_service.dart';
 import '../../../services/logger.dart';
-import '../../../services/queue_service.dart';
+import '../../../services/queue_consumer.dart';
 import '../../../services/queue_message.dart';
 import '../vocabulary_app.dart';
 import 'vocabulary_storage_v2.dart';
 import 'vocabulary_streaming_service.dart';
 
 /// Service that listens to vocabulary queue and fetches definitions using LLM.
-/// Provides detailed logging for LLM operations.
-class VocabularyDefinitionService {
+/// Extends QueueConsumer to get both push notifications and polling for reliability.
+class VocabularyDefinitionService extends QueueConsumer {
   static VocabularyDefinitionService? _instance;
   static VocabularyDefinitionService get instance =>
       _instance ??= VocabularyDefinitionService._();
@@ -23,43 +21,43 @@ class VocabularyDefinitionService {
     appName: 'Vocabulary Definition Service',
   );
 
-  String? _subscriptionId;
-  bool _isProcessing = false;
+  @override
+  String get id => 'vocabulary-definition-consumer';
 
-  /// Initialize the service and start listening to the queue
-  Future<void> init() async {
-    await _logger.info(
-      'Initializing vocabulary definition service',
-      eventType: 'service_init',
+  @override
+  String get name => 'Vocabulary Definition Consumer';
+
+  @override
+  String get queueId => 'vocabulary-definition';
+
+  @override
+  void onStart() {
+    _logger.info(
+      'Vocabulary definition service started',
+      eventType: 'service_start',
     );
+  }
 
-    _subscriptionId = QueueService.instance.subscribe(
-      id: 'vocabulary-definition-consumer',
-      queueId: 'vocabulary-definition',
-      callback: _processMessage,
-      name: 'Vocabulary Definition Consumer',
+  @override
+  void onStop() {
+    _logger.info(
+      'Vocabulary definition service stopped',
+      eventType: 'service_stop',
     );
+  }
 
-    await _logger.info(
-      'Subscribed to vocabulary-definition queue',
-      eventType: 'queue_subscribe',
-      metadata: {'subscriptionId': _subscriptionId},
+  @override
+  void onError(QueueMessage message, Object error) {
+    _logger.error(
+      'Error processing message: $error',
+      eventType: 'message_error',
+      metadata: {'messageId': message.id},
     );
   }
 
   /// Process a message from the queue
-  Future<bool> _processMessage(QueueMessage message) async {
-    if (_isProcessing) {
-      await _logger.debug(
-        'Already processing a message, will retry later',
-        eventType: 'queue_busy',
-        metadata: {'messageId': message.id},
-      );
-      return false;
-    }
-
-    _isProcessing = true;
-
+  @override
+  Future<bool> processMessage(QueueMessage message) async {
     try {
       final wordId = message.payload['wordId'] as String?;
       final wordText = message.payload['word'] as String?;
@@ -149,8 +147,6 @@ class VocabularyDefinitionService {
         },
       );
       return false; // Will retry
-    } finally {
-      _isProcessing = false;
     }
   }
 
@@ -245,6 +241,7 @@ EXAMPLES:
       // Collect the streamed response
       final buffer = StringBuffer();
       var charCount = 0;
+      var meaningMarkerFound = false;
 
       await for (final chunk in autocompletion.completeStream([
         ChatMessage(role: MessageRole.system, content: systemPrompt),
@@ -253,14 +250,22 @@ EXAMPLES:
         buffer.write(chunk);
         charCount += chunk.length;
 
-        // Parse and emit streaming updates
-        if (wordId != null) {
+        // Check if we've found the MEANING: marker
+        if (!meaningMarkerFound && buffer.toString().contains('MEANING:')) {
+          meaningMarkerFound = true;
+        }
+
+        // Only emit UI updates after we find the MEANING: marker to skip reasoning
+        if (meaningMarkerFound && wordId != null) {
           _emitStreamingUpdate(wordId, buffer.toString());
         }
       }
 
       stopwatch.stop();
-      final content = buffer.toString();
+      final rawContent = buffer.toString();
+
+      // Clean reasoning text from response if present
+      final content = _cleanReasoningFromResponse(rawContent);
 
       await _logger.info(
         'LLM streaming completed',
@@ -270,6 +275,7 @@ EXAMPLES:
           'durationMs': stopwatch.elapsedMilliseconds,
           'responseLength': content.length,
           'charCount': charCount,
+          'meaningMarkerFound': meaningMarkerFound,
         },
       );
 
@@ -392,10 +398,41 @@ EXAMPLES:
     }
   }
 
+  /// Clean reasoning text from response
+  /// Reasoning models may include chain-of-thought before the actual answer
+  String _cleanReasoningFromResponse(String content) {
+    // If the content starts with "MEANING:", it's already clean
+    if (content.trim().startsWith('MEANING:')) {
+      return content;
+    }
+
+    // Look for "MEANING:" marker and extract everything from there
+    // This removes any chain-of-thought reasoning that appears before the actual answer
+    final meaningIndex = content.indexOf('MEANING:');
+    if (meaningIndex != -1) {
+      return content.substring(meaningIndex);
+    }
+
+    // Fallback: look for the pattern where MEANING: appears after reasoning quotes
+    // e.g., "..." then "EXAMPLES:" ... MEANING: actual definition
+    final lines = content.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].trim().startsWith('MEANING:')) {
+        return lines.skip(i).join('\n');
+      }
+    }
+
+    // No MEANING: found - return as-is (will likely fail parsing)
+    return content;
+  }
+
   /// Emit streaming updates by parsing current buffer content
   void _emitStreamingUpdate(String wordId, String content) {
     final streaming = VocabularyStreamingService.instance;
-    final parsed = _parsePartialResponse(content);
+
+    // Clean reasoning from content before parsing
+    final cleanedContent = _cleanReasoningFromResponse(content);
+    final parsed = _parsePartialResponse(cleanedContent);
 
     if (parsed.meaning.isNotEmpty) {
       streaming.setMeaning(wordId, parsed.meaning);
@@ -469,10 +506,7 @@ EXAMPLES:
 
   /// Dispose the service
   void dispose() {
-    if (_subscriptionId != null) {
-      QueueService.instance.unsubscribe(_subscriptionId!);
-      _subscriptionId = null;
-    }
+    stop();
     _logger.info(
       'Vocabulary definition service disposed',
       eventType: 'service_dispose',

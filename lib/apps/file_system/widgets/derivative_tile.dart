@@ -6,17 +6,21 @@ import '../services/file_system_storage.dart';
 class DerivativeTile extends StatelessWidget {
   final DerivativeArtifact derivative;
   final VoidCallback onDelete;
+  final Future<void> Function()? onApplyRename;
 
   const DerivativeTile({
     super.key,
     required this.derivative,
     required this.onDelete,
+    this.onApplyRename,
   });
 
   IconData _getIconForType(String type) {
     switch (type) {
       case 'summary':
         return Icons.summarize;
+      case 'auto_title':
+        return Icons.drive_file_rename_outline;
       case 'transcript':
         return Icons.transcribe;
       case 'translation':
@@ -77,21 +81,102 @@ class DerivativeTile extends StatelessWidget {
         .getDerivativeContent(derivative.id);
 
     if (context.mounted) {
-      // Display markdown content
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => Scaffold(
-            appBar: AppBar(
-              title: Text(derivative.type.toUpperCase()),
-            ),
-            body: Markdown(
-              data: content,
-              selectable: true,
+      // For auto_title, show apply rename dialog instead of viewing
+      if (derivative.type == 'auto_title' && onApplyRename != null) {
+        _showApplyRenameDialog(context, content);
+      } else {
+        // Display markdown content
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => Scaffold(
+              appBar: AppBar(
+                title: Text(derivative.type.toUpperCase()),
+              ),
+              body: Markdown(
+                data: content,
+                selectable: true,
+              ),
             ),
           ),
+        );
+      }
+    }
+  }
+
+  Future<void> _showApplyRenameDialog(
+    BuildContext context,
+    String content,
+  ) async {
+    // Parse the proposed title from markdown content
+    final lines = content.split('\n');
+    String? proposedTitle;
+    String? originalName;
+    bool isApplied = false;
+
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+      if (line == '# Proposed Title' && i + 2 < lines.length) {
+        proposedTitle = lines[i + 2].trim();
+      } else if (line == '## Original Filename' && i + 1 < lines.length) {
+        originalName = lines[i + 1].trim();
+      } else if (line == '## Applied' && i + 1 < lines.length) {
+        isApplied = lines[i + 1].trim().toLowerCase() == 'true';
+      }
+    }
+
+    if (proposedTitle == null || originalName == null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to parse title from derivative')),
+        );
+      }
+      return;
+    }
+
+    if (isApplied) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Title has already been applied')),
+        );
+      }
+      return;
+    }
+
+    if (context.mounted) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Apply Title'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Rename file?', style: TextStyle(fontSize: 16)),
+              const SizedBox(height: 16),
+              Text('From: $originalName',
+                  style: const TextStyle(color: Colors.grey)),
+              const SizedBox(height: 8),
+              Text('To: $proposedTitle',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Apply'),
+            ),
+          ],
         ),
       );
+
+      if (confirmed == true && onApplyRename != null) {
+        await onApplyRename!();
+      }
     }
   }
 

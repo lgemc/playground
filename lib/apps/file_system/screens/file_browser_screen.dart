@@ -15,6 +15,7 @@ import '../widgets/folder_picker_dialog.dart';
 import '../../../services/share_service.dart';
 import '../../../services/share_content.dart';
 import '../../../services/shared_files_service.dart';
+import '../../../services/generators/auto_title_generator.dart';
 
 class FileBrowserScreen extends StatefulWidget {
   const FileBrowserScreen({super.key});
@@ -158,6 +159,10 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   }
 
   void _showFileContextMenu(FileItem file) {
+    // Check if file can be auto-titled (PDF or Markdown)
+    final canAutoTitle = file.name.toLowerCase().endsWith('.pdf') ||
+        file.name.toLowerCase().endsWith('.md');
+
     showModalBottomSheet(
       context: context,
       builder: (context) => Column(
@@ -187,6 +192,15 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
               );
             },
           ),
+          if (canAutoTitle)
+            ListTile(
+              leading: const Icon(Icons.drive_file_rename_outline),
+              title: const Text('Rename with AI'),
+              onTap: () {
+                Navigator.pop(context);
+                _renameWithAI(file);
+              },
+            ),
           ListTile(
             leading: const Icon(Icons.drive_file_move),
             title: const Text('Move'),
@@ -288,6 +302,125 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     if (result == true && nameController.text.isNotEmpty) {
       await FileSystemStorage.instance.renameFile(file.id, nameController.text);
       _loadContents();
+    }
+  }
+
+  Future<void> _renameWithAI(FileItem file) async {
+    // Show loading dialog
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Generating title with AI...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      // Create derivative using the auto-title generator
+      final generator = AutoTitleGenerator();
+
+      // Check if generator can process this file
+      if (!generator.canProcess(file)) {
+        if (mounted) {
+          Navigator.pop(context); // Close loading dialog
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('This file type is not supported for AI renaming'),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Generate the title
+      final derivativeContent = await generator.generate(file);
+
+      // Parse the proposed title from markdown content
+      final lines = derivativeContent.split('\n');
+      String? proposedTitle;
+
+      for (int i = 0; i < lines.length; i++) {
+        final line = lines[i].trim();
+        if (line == '# Proposed Title' && i + 2 < lines.length) {
+          proposedTitle = lines[i + 2].trim();
+          break;
+        }
+      }
+
+      if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
+
+      if (proposedTitle == null || proposedTitle.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to generate title')),
+          );
+        }
+        return;
+      }
+
+      // Show confirmation dialog
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Apply AI-Generated Title'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Rename file?', style: TextStyle(fontSize: 16)),
+              const SizedBox(height: 16),
+              Text('From: ${file.name}',
+                  style: const TextStyle(color: Colors.grey)),
+              const SizedBox(height: 8),
+              Text('To: $proposedTitle.${file.extension}',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed == true) {
+        final extension = file.extension;
+        final newName = extension.isNotEmpty
+            ? '$proposedTitle.$extension'
+            : proposedTitle;
+
+        await FileSystemStorage.instance.renameFile(file.id, newName);
+        _loadContents();
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('File renamed to $newName')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog if still open
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to generate title: $e')),
+        );
+      }
     }
   }
 

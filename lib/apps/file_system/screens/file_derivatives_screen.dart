@@ -4,6 +4,9 @@ import '../models/derivative_artifact.dart';
 import '../services/file_system_storage.dart';
 import '../widgets/derivative_tile.dart';
 import 'derivative_generator_dialog.dart';
+import 'pdf_reader_screen.dart';
+import '../../../services/share_service.dart';
+import '../../../services/share_content.dart';
 import 'dart:async';
 
 class FileDerivativesScreen extends StatefulWidget {
@@ -59,6 +62,37 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
     }
   }
 
+  void _openFile() {
+    if (widget.file.extension.toLowerCase() == 'pdf') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PdfReaderScreen(
+            filePath: _storage.getAbsolutePath(widget.file),
+            fileName: widget.file.name,
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Cannot open ${widget.file.extension} files yet'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _shareFile() async {
+    final content = ShareContent.file(
+      sourceAppId: 'file_system',
+      path: widget.file.relativePath,
+      name: widget.file.name,
+      mimeType: widget.file.mimeType,
+    );
+    content.data['fileId'] = widget.file.id;
+    await ShareService.instance.share(context, content);
+  }
+
   Future<void> _deleteDerivative(DerivativeArtifact derivative) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -89,6 +123,65 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
     }
   }
 
+  Future<void> _applyRename(DerivativeArtifact derivative) async {
+    // Get the derivative content to extract proposed title
+    final content = await _storage.getDerivativeContent(derivative.id);
+    final lines = content.split('\n');
+    String? proposedTitle;
+
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+      if (line == '# Proposed Title' && i + 2 < lines.length) {
+        proposedTitle = lines[i + 2].trim();
+        break;
+      }
+    }
+
+    if (proposedTitle == null || proposedTitle.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to extract title')),
+        );
+      }
+      return;
+    }
+
+    try {
+      // Get file extension
+      final extension = widget.file.extension;
+      final newName = extension.isNotEmpty
+          ? '$proposedTitle.$extension'
+          : proposedTitle;
+
+      // Rename the file
+      await _storage.renameFile(widget.file.id, newName);
+
+      // Update derivative to mark as applied
+      final updatedContent = content.replaceFirst(
+        '## Applied\nfalse',
+        '## Applied\ntrue',
+      ).replaceFirst(
+        '## Applied At\nnull',
+        '## Applied At\n${DateTime.now().toIso8601String()}',
+      );
+      await _storage.setDerivativeContent(derivative.id, updatedContent);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('File renamed to $newName')),
+        );
+        // Go back since the file has been renamed
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to rename file: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -108,9 +201,44 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
                     subtitle: Text(
                       '${(widget.file.size / 1024).toStringAsFixed(2)} KB',
                     ),
-                    trailing: const Chip(
-                      label: Text('Original'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Chip(label: Text('Original')),
+                        PopupMenuButton<String>(
+                          icon: const Icon(Icons.more_vert),
+                          onSelected: (value) {
+                            switch (value) {
+                              case 'open':
+                                _openFile();
+                                break;
+                              case 'share':
+                                _shareFile();
+                                break;
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            const PopupMenuItem(
+                              value: 'open',
+                              child: ListTile(
+                                leading: Icon(Icons.open_in_new),
+                                title: Text('Open'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'share',
+                              child: ListTile(
+                                leading: Icon(Icons.share),
+                                title: Text('Share'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
+                    onTap: _openFile,
                   ),
                 ),
                 const Padding(
@@ -166,6 +294,9 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
                             return DerivativeTile(
                               derivative: derivative,
                               onDelete: () => _deleteDerivative(derivative),
+                              onApplyRename: derivative.type == 'auto_title'
+                                  ? () => _applyRename(derivative)
+                                  : null,
                             );
                           },
                         ),

@@ -89,23 +89,19 @@ class DeviceDiscoveryService {
           if (datagram != null) {
             try {
               final message = utf8.decode(datagram.data);
-              print('[$myDeviceName] Received broadcast from ${datagram.address.address}:${datagram.port}: $message');
               final data = jsonDecode(message) as Map<String, dynamic>;
 
               // Skip our own messages early
               if (data['deviceId'] == myDeviceId) {
-                print('[$myDeviceName] Skipping own announcement');
                 return;
               }
 
               // Respond to discovery requests
               if (data['type'] == 'discovery_request') {
-                print('[$myDeviceName] Responding to discovery request');
                 _sendAdvertisement(myDeviceId, myDeviceName, myIpAddress);
               }
               // Process device announcements
               else if (data['type'] == 'device_announcement') {
-                print('[$myDeviceName] Processing device announcement from ${data['name']}');
                 await _processDeviceAnnouncement(data);
               }
             } catch (e) {

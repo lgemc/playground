@@ -230,18 +230,26 @@ class AutocompletionService {
       ),
     );
 
-    print('API Response - Choices count: ${response.choices.length}');
     final choice = response.choices.firstOrNull;
-    print('First choice: $choice');
-    print('Message content type: ${choice?.message.content.runtimeType}');
-    print('Message content: ${choice?.message.content}');
 
-    final content = choice?.message.content ?? '';
+    // For reasoning models: content is the final answer, reasoningContent is the thinking
+    // Some models (vLLM reasoning) only return reasoningContent and never content
+    final content = choice?.message.content;
+    final reasoning = choice?.message.reasoningContent;
 
-    print('Final content length: ${content.length}');
+    String finalContent;
+    if (content != null && content.isNotEmpty) {
+      // Normal case: model returned final answer in content
+      finalContent = content;
+    } else if (reasoning != null && reasoning.isNotEmpty) {
+      // Reasoning model case: need to extract answer from reasoning
+      finalContent = reasoning;
+    } else {
+      finalContent = '';
+    }
 
     return CompletionResponse(
-      content: content,
+      content: finalContent,
       finishReason: choice?.finishReason?.name,
       promptTokens: response.usage?.promptTokens,
       completionTokens: response.usage?.completionTokens,
@@ -273,6 +281,9 @@ class AutocompletionService {
 
     final client = _getClient();
 
+    print('DEBUG: Creating stream with model=$effectiveModel, maxTokens=$effectiveMaxTokens, temp=$effectiveTemperature');
+    print('DEBUG: Messages count: ${messages.length}');
+
     final stream = client.createChatCompletionStream(
       request: CreateChatCompletionRequest(
         model: ChatCompletionModel.modelId(effectiveModel),
@@ -283,14 +294,19 @@ class AutocompletionService {
     );
 
     await for (final chunk in stream) {
-      final delta = chunk.choices.firstOrNull?.delta.content;
-      final finishReason = chunk.choices.firstOrNull?.finishReason;
+      final choice = chunk.choices?.firstOrNull;
+      if (choice == null) continue;
+
+      // For reasoning models: prefer content, but fallback to reasoningContent if content is never sent
+      // Some vLLM reasoning models ONLY stream reasoningContent in streaming mode
+      final delta = choice.delta?.content ?? choice.delta?.reasoningContent;
+      final finishReason = choice.finishReason;
 
       if (finishReason != null) {
         print('Stream finished. Reason: $finishReason');
       }
 
-      if (delta != null) {
+      if (delta != null && delta.isNotEmpty) {
         yield delta;
       }
     }
@@ -347,17 +363,17 @@ class AutocompletionService {
     final toolCallsInProgress = <String, _ToolCallBuilder>{};
 
     await for (final chunk in stream) {
-      final choice = chunk.choices.firstOrNull;
+      final choice = chunk.choices?.firstOrNull;
       if (choice == null) continue;
 
-      // Handle content delta
-      final contentDelta = choice.delta.content;
+      // Only use content, not reasoningContent (reasoning is sent before the actual answer)
+      final contentDelta = choice.delta?.content;
       if (contentDelta != null && contentDelta.isNotEmpty) {
         yield ContentChunk(contentDelta);
       }
 
       // Handle tool call deltas
-      final toolCallDeltas = choice.delta.toolCalls;
+      final toolCallDeltas = choice.delta?.toolCalls;
       if (toolCallDeltas != null) {
         for (final toolCallDelta in toolCallDeltas) {
           final index = toolCallDelta.index;

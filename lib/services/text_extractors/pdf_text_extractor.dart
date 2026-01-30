@@ -12,6 +12,11 @@ class PdfTextExtractor implements TextExtractor {
 
   @override
   Future<String> extractText(String filePath) async {
+    return extractWithLimit(filePath, null);
+  }
+
+  /// Extract text with optional page limit
+  Future<String> extractWithLimit(String filePath, int? maxPages) async {
     final file = File(filePath);
     if (!await file.exists()) {
       throw FileSystemException('File not found', filePath);
@@ -22,19 +27,26 @@ class PdfTextExtractor implements TextExtractor {
     final document = pdf_lib.PdfDocument(inputBytes: bytes);
 
     try {
-      // Extract text from all pages
+      // Extract text from pages (limited if maxPages specified)
       final buffer = StringBuffer();
+      final pageCount = maxPages != null
+          ? (maxPages < document.pages.count ? maxPages : document.pages.count)
+          : document.pages.count;
 
-      for (int i = 0; i < document.pages.count; i++) {
-        // Extract text line by line from each page
-        final textLines = pdf_lib.PdfTextExtractor(document)
-            .extractTextLines(startPageIndex: i, endPageIndex: i);
+      // Extract text from specified pages with layout preservation
+      final extractor = pdf_lib.PdfTextExtractor(document);
 
-        for (final line in textLines) {
-          buffer.writeln(line.text);
-        }
+      for (int i = 0; i < pageCount; i++) {
+        // Extract text with layout enabled to preserve word spacing
+        final pageText = extractor.extractText(
+          startPageIndex: i,
+          endPageIndex: i,
+          layoutText: true,
+        );
 
-        if (i < document.pages.count - 1) {
+        buffer.writeln(pageText);
+
+        if (i < pageCount - 1) {
           buffer.writeln();
         }
       }
@@ -45,4 +57,5 @@ class PdfTextExtractor implements TextExtractor {
       document.dispose();
     }
   }
+
 }

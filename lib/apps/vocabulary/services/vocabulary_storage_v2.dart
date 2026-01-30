@@ -193,8 +193,8 @@ class VocabularyStorageV2 {
           ? DateTime.parse(entity['deletedAt'] as String)
           : null;
 
-      // Check if we have this word locally
-      final existing = await _db.getWord(remoteId);
+      // Check if we have this word locally (including soft-deleted for conflict resolution)
+      final existing = await _db.getWordIncludingDeleted(remoteId);
 
       if (existing == null) {
         // New word from remote - insert it

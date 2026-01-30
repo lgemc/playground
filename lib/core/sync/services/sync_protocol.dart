@@ -73,12 +73,13 @@ class SyncProtocol {
   final SyncConnection _connection;
   final StreamController<SyncMessage> _messageController =
       StreamController<SyncMessage>.broadcast();
+  StreamSubscription<Uint8List>? _dataSubscription;
 
   final List<int> _buffer = [];
   int? _expectedLength;
 
   SyncProtocol(this._connection) {
-    _connection.dataStream.listen(_handleIncomingData);
+    _dataSubscription = _connection.dataStream.listen(_handleIncomingData);
   }
 
   void _handleIncomingData(Uint8List data) {
@@ -204,6 +205,8 @@ class SyncProtocol {
 
   /// Dispose
   Future<void> dispose() async {
+    await _dataSubscription?.cancel();
+    _dataSubscription = null;
     await _messageController.close();
   }
 }

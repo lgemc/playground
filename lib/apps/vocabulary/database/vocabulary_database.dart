@@ -40,6 +40,12 @@ class VocabularyDatabase extends _$VocabularyDatabase {
         .getSingleOrNull();
   }
 
+  /// Get a word by ID including soft-deleted ones (for sync conflict resolution)
+  Future<VocabularyWord?> getWordIncludingDeleted(String id) {
+    return (select(vocabularyWords)..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+  }
+
   Future<VocabularyWord?> findByWord(String wordText, {String? excludeId}) {
     final normalized = wordText.trim().toLowerCase();
     return (select(vocabularyWords)
