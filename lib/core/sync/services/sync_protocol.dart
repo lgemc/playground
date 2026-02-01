@@ -131,6 +131,7 @@ class SyncProtocol {
 
   /// Perform handshake
   Future<void> handshake(String deviceId, String deviceName) async {
+    print('[Protocol] Sending handshake...');
     await send(SyncMessage(
       type: SyncMessageType.handshake,
       payload: {
@@ -139,6 +140,7 @@ class SyncProtocol {
         'protocolVersion': 1,
       },
     ));
+    print('[Protocol] Handshake sent, waiting for ACK...');
 
     // Wait for acknowledgment with extended timeout
     final ack = await messages
@@ -146,10 +148,12 @@ class SyncProtocol {
         .timeout(
           const Duration(seconds: 30),
           onTimeout: () {
+            print('[Protocol] ❌ Handshake ACK timeout!');
             throw TimeoutException('Handshake ACK timeout');
           },
         );
 
+    print('[Protocol] Received handshake ACK');
 
     if (ack.payload['status'] != 'ok') {
       throw Exception('Handshake failed: ${ack.payload['error']}');
@@ -176,6 +180,23 @@ class SyncProtocol {
     // Send in batches to avoid large messages
     const batchSize = 100;
 
+    // Always send at least one batch, even if empty
+    final totalBatches = entities.isEmpty ? 1 : (entities.length / batchSize).ceil();
+
+    if (entities.isEmpty) {
+      // Send empty batch
+      await send(SyncMessage(
+        type: SyncMessageType.syncData,
+        payload: {
+          'appId': appId,
+          'entities': [],
+          'batchIndex': 0,
+          'totalBatches': 1,
+        },
+      ));
+      return;
+    }
+
     for (var i = 0; i < entities.length; i += batchSize) {
       final end = (i + batchSize < entities.length) ? i + batchSize : entities.length;
       final batch = entities.sublist(i, end);
@@ -186,7 +207,7 @@ class SyncProtocol {
           'appId': appId,
           'entities': batch,
           'batchIndex': i ~/ batchSize,
-          'totalBatches': (entities.length / batchSize).ceil(),
+          'totalBatches': totalBatches,
         },
       ));
 
@@ -299,7 +320,9 @@ class SyncCoordinator {
 
     try {
       // Request sync
+      print('[SyncCoordinator] Sending syncRequest for appId: $appId');
       await _protocol.requestSync(appId, lastSyncTime);
+      print('[SyncCoordinator] syncRequest sent, waiting for messages...');
 
       // Start listening for remote changes BEFORE sending ours (to avoid race condition)
       final remoteEntities = <Map<String, dynamic>>[];
@@ -309,15 +332,21 @@ class SyncCoordinator {
       await for (final message in _protocol.messages.timeout(
         const Duration(seconds: 30),
         onTimeout: (sink) {
+          print('[SyncCoordinator] ⚠️  Timeout waiting for messages');
           sink.close();
         },
       )) {
+        print('[SyncCoordinator] Received message type: ${message.type}');
+
         // Send our data on first iteration (after we've started listening)
         if (!sendingOurData) {
           sendingOurData = true;
+          print('[SyncCoordinator] Calling getChanges...');
           localChanges = await getChanges(lastSyncTime);
           entitiesSent = localChanges.length;
+          print('[SyncCoordinator] Got $entitiesSent local changes, sending...');
           await _protocol.sendSyncData(appId, localChanges, waitForAck: false);
+          print('[SyncCoordinator] Local changes sent');
         }
 
         if (message.type == SyncMessageType.syncData) {
@@ -384,7 +413,9 @@ class SyncCoordinator {
       // Use a subscription instead of await-for to have better control
       bool receivedAllData = false;
       print('[Sync] Waiting for syncData messages for appId: $appId');
-      final subscription = _protocol.messages.timeout(
+      StreamSubscription? subscription;
+
+      subscription = _protocol.messages.timeout(
         const Duration(seconds: 30), // Increased timeout for debugging
         onTimeout: (sink) {
           print('[Sync] ⚠️  Timeout waiting for syncData! Received ${remoteEntities.length} entities');
@@ -411,19 +442,28 @@ class SyncCoordinator {
             if (batchIndex == totalBatches - 1) {
               print('[Sync] ✅ Received all batches: ${remoteEntities.length} total entities');
               receivedAllData = true;
+              // Cancel subscription immediately
+              await subscription?.cancel();
             }
           }
         } else if (message.type == SyncMessageType.syncAck) {
           print('[Sync] Received syncAck');
+        } else if (message.type == SyncMessageType.handshake || message.type == SyncMessageType.handshakeAck) {
+          print('[Sync] Ignoring ${message.type} (handled by outer loop)');
+          // Ignore handshake messages - they're handled by the outer connection loop
         } else {
-          print('[Sync] Unexpected message, stopping');
+          print('[Sync] Unexpected message: ${message.type}, stopping');
           receivedAllData = true;
+          await subscription?.cancel();
         }
       });
 
-      // Wait for completion or timeout
+      // Wait for subscription to complete (either data received or timeout)
       await subscription.asFuture().catchError((_) => null);
-      await subscription.cancel();
+      if (!receivedAllData) {
+        await subscription.cancel();
+      }
+      print('[Sync] handleSyncRequest subscription canceled');
 
       // Apply remote changes
       await applyChanges(appId, remoteEntities);

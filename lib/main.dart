@@ -762,8 +762,25 @@ Future<void> _initSyncService() async {
 
   syncService.setGetChangesCallback((_, since) async {
     try {
+      print('[Sync] getChanges called with since: $since');
+
       // Use CrdtDatabase (works on all platforms as fallback)
-      final changeset = await CrdtDatabase.instance.getChangeset();
+      // Use modifiedAfter parameter to filter changes at the database level
+      final Hlc? modifiedAfter = since != null
+          ? Hlc.fromDate(since, CrdtDatabase.instance.nodeId)
+          : null;
+
+      print('[Sync] Calling getChangeset with modifiedAfter: $modifiedAfter');
+
+      final changeset = await CrdtDatabase.instance.db.getChangeset(
+        modifiedAfter: modifiedAfter,
+      );
+
+      print('[Sync] Raw changeset has ${changeset.length} tables');
+      changeset.forEach((table, records) {
+        print('[Sync]   Table $table: ${records.length} records');
+      });
+
       // Convert changeset to flat list for protocol compatibility
       final changes = <Map<String, dynamic>>[];
       changeset.forEach((table, records) {
@@ -774,10 +791,11 @@ Future<void> _initSyncService() async {
           });
         }
       });
-      print('[Sync] Got ${changes.length} changes from changeset');
+      print('[Sync] Returning ${changes.length} changes');
       return changes;
-    } catch (e) {
+    } catch (e, stackTrace) {
       print('[Sync] Error getting changes: $e');
+      print('[Sync] Stack trace: $stackTrace');
       return [];
     }
   });

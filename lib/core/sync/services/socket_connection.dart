@@ -97,11 +97,22 @@ class SocketConnectionService implements ConnectionService {
 
     print('[Socket] Server listening on ${_serverSocket!.address.address}:${_serverSocket!.port}');
 
-    _serverSocket!.listen((socket) {
-      print('[Socket] 🔌 New socket connection from ${socket.remoteAddress.address}:${socket.remotePort}');
-      // For incoming connections, we need to receive device info first
-      _handleIncomingConnection(socket);
-    });
+    _serverSocket!.listen(
+      (socket) {
+        print('[Socket] 🔌 New socket connection from ${socket.remoteAddress.address}:${socket.remotePort}');
+        // For incoming connections, we need to receive device info first
+        _handleIncomingConnection(socket);
+      },
+      onError: (error, stackTrace) {
+        print('[Socket] ❌ Error in server socket listener: $error');
+        print('[Socket] Stack trace: $stackTrace');
+      },
+      onDone: () {
+        print('[Socket] ⚠️  Server socket listener closed!');
+      },
+      cancelOnError: false,
+    );
+    print('[Socket] ✅ Server socket listener active');
   }
 
   void _handleIncomingConnection(Socket socket) {
@@ -133,15 +144,12 @@ class SocketConnectionService implements ConnectionService {
 
   @override
   Future<SyncConnection> connectToDevice(Device device) async {
-    // Check if already connected
+    // Always create fresh connection (caching has issues with timeouts)
+    // Remove any existing connection first
     if (_activeConnections.containsKey(device.id)) {
-      final existing = _activeConnections[device.id]!;
-      if (existing.isConnected) {
-        return existing;
-      } else {
-        // Remove stale connection
-        _activeConnections.remove(device.id);
-      }
+      print('[Socket] Removing old connection for ${device.id}');
+      final old = _activeConnections.remove(device.id);
+      await old?.close();
     }
 
     if (device.ipAddress == null || device.port == null) {

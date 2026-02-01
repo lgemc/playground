@@ -87,8 +87,20 @@ class DeviceSyncService {
     // Start discovering other devices
     await _discoveryService.startDiscovery();
 
-    // Handle incoming connections
-    _connectionService.incomingConnections.listen(_handleIncomingConnection);
+    // Handle incoming connections with error handling
+    print('[Sync] Setting up incoming connection listener...');
+    _connectionService.incomingConnections.listen(
+      _handleIncomingConnection,
+      onError: (error, stackTrace) {
+        print('[Sync] ❌ Error in incoming connection listener: $error');
+        print('[Sync] Stack trace: $stackTrace');
+      },
+      onDone: () {
+        print('[Sync] ⚠️  Incoming connection stream closed!');
+      },
+      cancelOnError: false, // Keep listening even if one connection errors
+    );
+    print('[Sync] ✅ Incoming connection listener active');
   }
 
   /// Stop the sync service
@@ -114,16 +126,15 @@ class DeviceSyncService {
 
   /// Connect to a device
   Future<SyncSession> connectToDevice(Device device) async {
-    // Check if already connected
-    if (_activeSessions.containsKey(device.id)) {
-      final existing = _activeSessions[device.id]!;
-      if (existing.isActive) {
-        return existing;
-      }
-    }
+    // Always create a new connection for now (session reuse has issues with timeout)
+    // TODO: Implement proper connection health checking
+
+    print('[Sync] Establishing NEW connection to ${device.ipAddress}:${device.port}');
 
     // Establish connection
     final connection = await _connectionService.connectToDevice(device);
+
+    print('[Sync] Connection established!');
 
     // Create session
     final session = SyncSession(
@@ -147,21 +158,26 @@ class DeviceSyncService {
     }
 
     try {
-
+      print('[Sync] Connecting to device...');
       // Connect to device
       final session = await connectToDevice(device);
+      print('[Sync] Connected! Creating protocol handler...');
 
       // Create protocol handler
       final protocol = SyncProtocol(session.connection);
+      print('[Sync] Protocol created. Performing handshake...');
 
       // Perform handshake
       final myDeviceId = await _deviceIdService.getDeviceId();
       await protocol.handshake(myDeviceId, 'My Device');
+      print('[Sync] ✅ Handshake completed!');
 
       // Get last sync time for this app with this device
       final lastSyncTime = await _getLastSyncTime(appId, device.id);
+      print('[Sync] Last sync time: $lastSyncTime');
 
       // Create sync coordinator
+      print('[Sync] Creating coordinator...');
       final coordinator = SyncCoordinator(protocol);
 
       // Perform metadata sync
@@ -229,7 +245,8 @@ class DeviceSyncService {
 
   /// Handle incoming connection from another device
   Future<void> _handleIncomingConnection(SyncConnection connection) async {
-    print('[Sync] 📥 Incoming connection from ${connection.device.ipAddress}');
+    final timestamp = DateTime.now().toIso8601String();
+    print('[Sync] 📥 [$timestamp] NEW incoming connection from ${connection.device.ipAddress}');
 
     if (_getChangesCallback == null || _applyChangesCallback == null) {
       print('[Sync] ❌ Callbacks not set, closing connection');
@@ -239,38 +256,34 @@ class DeviceSyncService {
 
     try {
       final protocol = SyncProtocol(connection);
-      print('[Sync] Waiting for handshake...');
-
-      // Wait for handshake with extended timeout
-      final handshakeMsg = await protocol.messages
-          .firstWhere((msg) => msg.type == SyncMessageType.handshake)
-          .timeout(const Duration(seconds: 30));
-
-      print('[Sync] ✅ Handshake received');
-
-      // Send acknowledgment
-      await protocol.send(SyncMessage(
-        type: SyncMessageType.handshakeAck,
-        payload: {'status': 'ok'},
-      ));
-      print('[Sync] Sent handshake ack');
-
-      // Listen for sync requests with timeout to prevent hanging
       final coordinator = SyncCoordinator(protocol);
 
-      // Handle ONE sync per connection - simpler and more reliable
-      print('[Sync] Listening for sync requests...');
+      print('[Sync] Listening for messages...');
 
       try {
         String? syncedAppId;
-        await for (final message in protocol.messages.timeout(
-          const Duration(seconds: 60),
-          onTimeout: (sink) {
-            print('[Sync] ⚠️  Timeout waiting for messages');
-            sink.close();
-          },
-        )) {
+        bool handshakeCompleted = false;
+
+        await for (final message in protocol.messages) {
           print('[Sync] Received message: ${message.type}');
+          print('[Sync] Is handshake? ${message.type == SyncMessageType.handshake}');
+          print('[Sync] handshakeCompleted? $handshakeCompleted');
+
+          if (message.type == SyncMessageType.handshake) {
+            if (!handshakeCompleted) {
+              print('[Sync] ✅ Handshake received');
+              handshakeCompleted = true;
+            } else {
+              print('[Sync] ⚠️  Duplicate handshake (connection reused)');
+            }
+            // Always send ACK (connection might be reused)
+            await protocol.send(SyncMessage(
+              type: SyncMessageType.handshakeAck,
+              payload: {'status': 'ok'},
+            ));
+            print('[Sync] Sent handshake ack');
+            continue;
+          }
 
           if (message.type == SyncMessageType.syncRequest) {
             syncedAppId = message.payload['appId'] as String;
@@ -282,9 +295,11 @@ class DeviceSyncService {
             );
             print('[Sync] ✅ handleSyncRequest completed');
 
-            // Don't break - continue listening for blob requests
+            // Don't break - connection stays open for more syncs or blob requests
             if (syncedAppId == 'crdt_database') {
-              print('[Sync] Metadata sync done, waiting for blob requests...');
+              print('[Sync] Metadata sync done, ready for blob requests or next sync...');
+            } else {
+              print('[Sync] Sync done, ready for next sync request...');
             }
           } else if (message.type == SyncMessageType.blobRequest && syncedAppId == 'crdt_database') {
             print('[Sync] Received blob request, processing...');
@@ -294,8 +309,8 @@ class DeviceSyncService {
               (hash) => storage.getBlobByHash(hash),
               (hash) => storage.getRelativePathByHash(hash),
             );
-            print('[Sync] Blob request handled, closing connection');
-            break; // Done with blob sync
+            print('[Sync] Blob request handled, ready for next sync...');
+            // Don't break - keep connection alive for more syncs
           }
         }
         print('[Sync] Message loop ended');
@@ -305,12 +320,15 @@ class DeviceSyncService {
         // Always clean up
         print('[Sync] Cleaning up connection');
         await protocol.dispose();
+        print('[Sync] About to close connection');
         await connection.close();
+        print('[Sync] Connection closed');
       }
     } catch (e) {
       print('[Sync] Error in _handleIncomingConnection: $e');
       await connection.close();
     }
+    print('[Sync] _handleIncomingConnection ended');
   }
 
   /// Get the last sync time for an app with a device
