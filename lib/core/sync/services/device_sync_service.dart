@@ -229,48 +229,58 @@ class DeviceSyncService {
 
   /// Handle incoming connection from another device
   Future<void> _handleIncomingConnection(SyncConnection connection) async {
+    print('[Sync] 📥 Incoming connection from ${connection.device.ipAddress}');
 
     if (_getChangesCallback == null || _applyChangesCallback == null) {
+      print('[Sync] ❌ Callbacks not set, closing connection');
       await connection.close();
       return;
     }
 
     try {
       final protocol = SyncProtocol(connection);
+      print('[Sync] Waiting for handshake...');
 
       // Wait for handshake with extended timeout
       final handshakeMsg = await protocol.messages
           .firstWhere((msg) => msg.type == SyncMessageType.handshake)
           .timeout(const Duration(seconds: 30));
 
+      print('[Sync] ✅ Handshake received');
 
       // Send acknowledgment
       await protocol.send(SyncMessage(
         type: SyncMessageType.handshakeAck,
         payload: {'status': 'ok'},
       ));
+      print('[Sync] Sent handshake ack');
 
       // Listen for sync requests with timeout to prevent hanging
       final coordinator = SyncCoordinator(protocol);
 
       // Handle ONE sync per connection - simpler and more reliable
+      print('[Sync] Listening for sync requests...');
 
       try {
         String? syncedAppId;
         await for (final message in protocol.messages.timeout(
           const Duration(seconds: 60),
           onTimeout: (sink) {
+            print('[Sync] ⚠️  Timeout waiting for messages');
             sink.close();
           },
         )) {
+          print('[Sync] Received message: ${message.type}');
 
           if (message.type == SyncMessageType.syncRequest) {
             syncedAppId = message.payload['appId'] as String;
+            print('[Sync] Processing syncRequest for appId: $syncedAppId');
             await coordinator.handleSyncRequest(
               message,
               (appId, since) => _getChangesCallback!(appId, since),
               (appId, entities) => _applyChangesCallback!(appId, entities),
             );
+            print('[Sync] ✅ handleSyncRequest completed');
 
             // Don't break - continue listening for blob requests
             if (syncedAppId == 'crdt_database') {
@@ -288,14 +298,17 @@ class DeviceSyncService {
             break; // Done with blob sync
           }
         }
+        print('[Sync] Message loop ended');
       } catch (e) {
         print('[Sync] Error in incoming connection handler: $e');
       } finally {
         // Always clean up
+        print('[Sync] Cleaning up connection');
         await protocol.dispose();
         await connection.close();
       }
     } catch (e) {
+      print('[Sync] Error in _handleIncomingConnection: $e');
       await connection.close();
     }
   }

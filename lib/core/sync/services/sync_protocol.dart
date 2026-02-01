@@ -301,15 +301,10 @@ class SyncCoordinator {
       // Request sync
       await _protocol.requestSync(appId, lastSyncTime);
 
-      // Get local changes
-      final localChanges = await getChanges(lastSyncTime);
-      entitiesSent = localChanges.length;
-
-      // Send local changes (don't wait for ACK to avoid consuming messages from stream)
-      await _protocol.sendSyncData(appId, localChanges, waitForAck: false);
-
-      // Receive remote changes
+      // Start listening for remote changes BEFORE sending ours (to avoid race condition)
       final remoteEntities = <Map<String, dynamic>>[];
+      bool sendingOurData = false;
+      List<Map<String, dynamic>>? localChanges;
 
       await for (final message in _protocol.messages.timeout(
         const Duration(seconds: 30),
@@ -317,6 +312,14 @@ class SyncCoordinator {
           sink.close();
         },
       )) {
+        // Send our data on first iteration (after we've started listening)
+        if (!sendingOurData) {
+          sendingOurData = true;
+          localChanges = await getChanges(lastSyncTime);
+          entitiesSent = localChanges.length;
+          await _protocol.sendSyncData(appId, localChanges, waitForAck: false);
+        }
+
         if (message.type == SyncMessageType.syncData) {
           if (message.payload['appId'] == appId) {
             final entities = (message.payload['entities'] as List)
@@ -380,18 +383,22 @@ class SyncCoordinator {
 
       // Use a subscription instead of await-for to have better control
       bool receivedAllData = false;
+      print('[Sync] Waiting for syncData messages for appId: $appId');
       final subscription = _protocol.messages.timeout(
-        const Duration(seconds: 5),
+        const Duration(seconds: 30), // Increased timeout for debugging
         onTimeout: (sink) {
+          print('[Sync] ⚠️  Timeout waiting for syncData! Received ${remoteEntities.length} entities');
           receivedAllData = true;
           sink.close();
         },
       ).listen((message) async {
+        print('[Sync] Received message type: ${message.type}');
 
         if (message.type == SyncMessageType.syncData) {
           if (message.payload['appId'] == appId) {
             final entities = (message.payload['entities'] as List)
                 .cast<Map<String, dynamic>>();
+            print('[Sync] Received ${entities.length} entities in batch');
             remoteEntities.addAll(entities);
 
             // Acknowledge
@@ -400,12 +407,16 @@ class SyncCoordinator {
             // Check if this was the last batch
             final batchIndex = message.payload['batchIndex'] as int;
             final totalBatches = message.payload['totalBatches'] as int;
+            print('[Sync] Batch $batchIndex of $totalBatches');
             if (batchIndex == totalBatches - 1) {
+              print('[Sync] ✅ Received all batches: ${remoteEntities.length} total entities');
               receivedAllData = true;
             }
           }
         } else if (message.type == SyncMessageType.syncAck) {
+          print('[Sync] Received syncAck');
         } else {
+          print('[Sync] Unexpected message, stopping');
           receivedAllData = true;
         }
       });

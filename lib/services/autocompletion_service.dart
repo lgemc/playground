@@ -528,7 +528,7 @@ class AutocompletionService {
   /// Simple streaming completion with structured output (content only, no reasoning)
   ///
   /// Uses raw SSE streaming to properly separate reasoning from content.
-  /// Only yields main content chunks, filtering out chain-of-thought reasoning.
+  /// Yields main content immediately. If model only sends reasoning, yields that instead.
   /// This is ideal for structured outputs like titles, definitions, etc.
   Stream<String> promptStreamContentOnly(
     String prompt, {
@@ -548,10 +548,15 @@ class AutocompletionService {
       model: model,
       maxTokens: maxTokens,
       temperature: temperature,
-      contentOnly: true,
+      contentOnly: false,  // Get both reasoning and content
     )) {
+      // Yield content immediately if available (preferred)
       if (chunk.hasContent) {
         yield chunk.content!;
+      }
+      // Otherwise yield reasoning (for models that only send reasoning_content)
+      else if (chunk.hasReasoning) {
+        yield chunk.reasoningContent!;
       }
     }
   }

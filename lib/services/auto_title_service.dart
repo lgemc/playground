@@ -10,20 +10,37 @@ class AutoTitleService {
   final _autocompletion = AutocompletionService.instance;
 
   static const String _systemPrompt =
-      '''You are a helpful assistant that generates concise, descriptive filenames based on document content.
-
-IMPORTANT: Respond with ONLY the filename. Do not include any reasoning, explanation, or additional text.
+      '''Generate a filename for a document.
 
 Rules:
-- If the document has an explicit title (e.g., # heading in markdown, title in PDF), use it literally
-- Otherwise, generate a concise, descriptive filename (3-8 words) based on the content
-- Return ONLY the filename without extension
-- Use title case (e.g., "Machine Learning Basics" not "machine learning basics")
-- Replace spaces with underscores (e.g., "Machine_Learning_Basics")
-- Avoid special characters: only use letters, numbers, underscores, and hyphens
-- Keep it under 50 characters if possible
+- If the document has a title at the start, use it
+- Otherwise create a descriptive filename (3-8 words)
+- Use underscores instead of spaces
+- Only use letters, numbers, underscores, and hyphens
+- Maximum 50 characters
 
-Output format: Just the filename, nothing else.''';
+Use this EXACT format (no other text):
+
+FILENAME: <your_filename_here>''';
+
+  /// Extract title from structured response
+  String _extractTitle(String response) {
+    // Look for "FILENAME: <name>" marker
+    final filenameMatch = RegExp(
+      r'FILENAME:\s*(.+?)(?:\n|$)',
+      multiLine: true,
+    ).firstMatch(response);
+
+    if (filenameMatch != null) {
+      final title = filenameMatch.group(1)?.trim() ?? '';
+      if (title.isNotEmpty) {
+        return title;
+      }
+    }
+
+    // Fallback: return trimmed response
+    return response.trim();
+  }
 
   /// Sanitize filename to remove invalid characters
   String _sanitizeFilename(String filename) {
@@ -55,11 +72,26 @@ Output format: Just the filename, nothing else.''';
   /// Sanitize content for safe inclusion in prompts
   String _sanitizeContent(String content) {
     // Remove null bytes and other control characters that can break JSON
-    return content
+    var sanitized = content
         .replaceAll('\x00', '')  // Remove null bytes
         .replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), '')  // Remove other control chars
         .replaceAll('\r\n', '\n')  // Normalize line endings
         .trim();
+
+    // Remove invalid Unicode surrogate pairs that break JSON encoding
+    // Surrogates are in range U+D800 to U+DFFF
+    final runes = <int>[];
+    for (final rune in sanitized.runes) {
+      // Skip lone surrogates (0xD800-0xDFFF)
+      if (rune < 0xD800 || rune > 0xDFFF) {
+        runes.add(rune);
+      } else {
+        // Replace with safe placeholder
+        runes.add(0x20); // space
+      }
+    }
+
+    return String.fromCharCodes(runes).trim();
   }
 
   /// Generate a title for a file based on its content
@@ -94,21 +126,30 @@ $safeContent
 Generate a filename based on this content following the rules in the system prompt.''';
 
     try {
-      // Use content-only streaming to skip chain-of-thought reasoning
-      // This avoids the need to extract titles from quoted reasoning text
+      print('[AutoTitle] Sending prompt (${safeContent.length} chars)');
+
+      // Stream the response - don't limit tokens to allow reasoning models to complete
       final buffer = StringBuffer();
       await for (final chunk in _autocompletion.promptStreamContentOnly(
         prompt,
         systemPrompt: _systemPrompt,
         temperature: 0.3,
-        maxTokens: 200,
       )) {
         buffer.write(chunk);
       }
       final result = buffer.toString();
 
+      print('[AutoTitle] AI response: "$result"');
+
+      // Extract title from structured response
+      final extracted = _extractTitle(result);
+
+      print('[AutoTitle] Extracted title: "$extracted"');
+
       // Sanitize the result
-      final sanitized = _sanitizeFilename(result.trim());
+      final sanitized = _sanitizeFilename(extracted);
+
+      print('[AutoTitle] Sanitized result: "$sanitized"');
 
       return sanitized;
     } catch (e) {

@@ -153,35 +153,71 @@ final delta = choice.delta.content ?? choice.delta.reasoningContent;
 
 **Handling Reasoning in Structured Responses**:
 
-When your prompt expects structured output (like vocabulary definitions or file titles), reasoning models may include chain-of-thought before the actual answer. You need to extract the final answer:
+Reasoning models may send ONLY `reasoning_content` and never send `content`. This means they include chain-of-thought in the response. Two approaches:
+
+**Approach 1: Use Structured Prompts with Markers (Recommended)**
+
+Use explicit markers in your system prompt and parse them:
 
 ```dart
-// For responses with markers (like "MEANING:" or "TITLE:")
-String _cleanReasoningFromResponse(String content) {
-  final marker = 'MEANING:'; // or your expected marker
-  final markerIndex = content.indexOf(marker);
-  if (markerIndex != -1) {
-    return content.substring(markerIndex);
-  }
-  return content;
-}
+// System prompt
+final systemPrompt = '''You are a dictionary assistant.
 
-// For responses with quoted answers
-String _extractFromQuotes(String content) {
-  final quotePattern = RegExp(r'"([^"]+)"');
-  final matches = quotePattern.allMatches(content).toList();
-  // Find longest quote (likely the actual answer)
-  String longest = '';
-  for (var match in matches) {
-    final quoted = match.group(1)!;
-    if (quoted.length > longest.length && quoted.length < 150) {
-      longest = quoted;
-    }
+Use this EXACT format (no other text):
+
+MEANING: <your definition here>
+
+EXAMPLES:
+1. <first example>
+2. <second example>''';
+
+// Extraction
+String _extractMeaning(String response) {
+  final meaningMatch = RegExp(r'MEANING:\s*(.+?)(?=\n\nEXAMPLES:|\n\n|$)', dotAll: true)
+      .firstMatch(response);
+  if (meaningMatch != null) {
+    return meaningMatch.group(1)?.trim() ?? '';
   }
-  return longest.isNotEmpty ? longest : content;
+  return response.trim();
 }
 ```
 
+**Approach 2: Extract from End of Response**
+
+For simple outputs (like filenames), instruct the model to output ONLY the answer, then take the last substantial line:
+
+```dart
+// System prompt
+final systemPrompt = '''Generate a filename for a document.
+Output ONLY the filename, nothing else.
+
+Rules:
+- Use underscores instead of spaces
+- Maximum 50 characters
+
+Output only the filename. No explanation, no reasoning, no other text.''';
+
+// Extraction - work backwards from end of response
+String _extractAnswer(String response) {
+  final lines = response.trim().split('\n');
+  for (int i = lines.length - 1; i >= 0; i--) {
+    final line = lines[i].trim();
+    // Skip reasoning artifacts
+    if (line.isEmpty || line.endsWith('?') || line.contains('let\'s') || line.length < 3) {
+      continue;
+    }
+    return line; // Last substantial line is the answer
+  }
+  return response.trim();
+}
+```
+
+**Important**:
+- Use `promptStreamContentOnly()` which handles both `content` and `reasoning_content` fields
+- Don't use tight `maxTokens` limits - let reasoning models complete their thought
+- Keep extraction simple - work backwards from response end or use clear markers
+- Avoid complex regex hacks that try to guess what the answer looks like
+
 **Reference Implementations**:
-- **File titles**: `lib/services/auto_title_service.dart` - extracts quoted titles from reasoning
-- **Vocabulary definitions**: `lib/apps/vocabulary/services/vocabulary_definition_service.dart` - finds "MEANING:" marker
+- **File titles**: `lib/services/auto_title_service.dart` - extracts from end of reasoning output
+- **Vocabulary definitions**: `lib/apps/vocabulary/services/vocabulary_definition_service.dart` - uses `MEANING:` marker

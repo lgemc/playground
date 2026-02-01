@@ -95,7 +95,10 @@ class SocketConnectionService implements ConnectionService {
     }
 
 
+    print('[Socket] Server listening on ${_serverSocket!.address.address}:${_serverSocket!.port}');
+
     _serverSocket!.listen((socket) {
+      print('[Socket] 🔌 New socket connection from ${socket.remoteAddress.address}:${socket.remotePort}');
       // For incoming connections, we need to receive device info first
       _handleIncomingConnection(socket);
     });
@@ -135,6 +138,9 @@ class SocketConnectionService implements ConnectionService {
       final existing = _activeConnections[device.id]!;
       if (existing.isConnected) {
         return existing;
+      } else {
+        // Remove stale connection
+        _activeConnections.remove(device.id);
       }
     }
 
@@ -157,6 +163,13 @@ class SocketConnectionService implements ConnectionService {
     // Create connection immediately - handshake happens at protocol level
     final connection = SocketConnection(socket, device);
     _activeConnections[device.id] = connection;
+
+    // Clean up when connection closes
+    connection.dataStream.listen(
+      null,
+      onDone: () => _activeConnections.remove(device.id),
+      cancelOnError: true,
+    );
 
     return connection;
   }
