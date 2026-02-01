@@ -10,7 +10,6 @@ import 'services/autocompletion_service.dart';
 import 'services/queue_service.dart';
 import 'core/logs_storage.dart';
 import 'core/sub_app.dart';
-import 'apps/launcher/launcher_app.dart';
 import 'apps/launcher/launcher_screen.dart';
 import 'apps/logs/logs_app.dart';
 import 'apps/notes/notes_app.dart';
@@ -715,9 +714,6 @@ void _initDerivativeService() {
 
 void _registerApps() {
   final registry = AppRegistry.instance;
-
-  // Register the launcher itself (for testing/display purposes)
-  registry.register(LauncherApp());
 
   // Register apps
   registry.register(SettingsApp());
