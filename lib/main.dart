@@ -31,7 +31,6 @@ import 'services/whisper_service.dart';
 import 'core/app_bus.dart';
 import 'apps/lms/creator/lms_creator_app.dart';
 import 'apps/lms/viewer/lms_viewer_app.dart';
-import 'apps/cr_test/cr_test_app.dart';
 import 'core/sync/services/device_sync_service.dart';
 import 'core/sync/services/device_id_service.dart';
 import 'core/sync/database/sync_database.dart';
@@ -721,7 +720,6 @@ void _registerApps() {
   registry.register(LauncherApp());
 
   // Register apps
-  registry.register(CrTestApp()); // CR-SQLite test app (first for easy access)
   registry.register(SettingsApp());
   registry.register(NotesApp());
   registry.register(VocabularyApp());
