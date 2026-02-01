@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_registry.dart';
-import '../../widgets/sync_widget.dart';
 import 'models/word.dart';
 import 'word_editor_screen.dart';
 import 'services/vocabulary_storage.dart';
@@ -95,20 +94,6 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
         ),
         title: const Text('Vocabulary'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.sync),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const SyncWidget(
-                    appId: 'vocabulary',
-                    appName: 'Vocabulary',
-                  ),
-                ),
-              );
-            },
-            tooltip: 'Sync with other devices',
-          ),
           IconButton(
             icon: const Icon(Icons.add),
             onPressed: _createWord,
