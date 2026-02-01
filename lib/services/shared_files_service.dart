@@ -23,24 +23,33 @@ class SharedFilesService {
   Future<void> initialize({
     required Function(List<String>) onFilesReceived,
   }) async {
-    // For files shared when the app is closed
-    final initialMedia = await ReceiveSharingIntent.instance.getInitialMedia();
-    if (initialMedia.isNotEmpty) {
-      final filePaths = await _processSharedFiles(initialMedia);
-      if (filePaths.isNotEmpty) {
-        onFilesReceived(filePaths);
-      }
+    // Only initialize on mobile platforms (Android/iOS)
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return; // Desktop platforms don't support receive_sharing_intent
     }
 
-    // For files shared while the app is running
-    ReceiveSharingIntent.instance.getMediaStream().listen((List<SharedMediaFile> media) async {
-      if (media.isNotEmpty) {
-        final filePaths = await _processSharedFiles(media);
+    try {
+      // For files shared when the app is closed
+      final initialMedia = await ReceiveSharingIntent.instance.getInitialMedia();
+      if (initialMedia.isNotEmpty) {
+        final filePaths = await _processSharedFiles(initialMedia);
         if (filePaths.isNotEmpty) {
           onFilesReceived(filePaths);
         }
       }
-    });
+
+      // For files shared while the app is running
+      ReceiveSharingIntent.instance.getMediaStream().listen((List<SharedMediaFile> media) async {
+        if (media.isNotEmpty) {
+          final filePaths = await _processSharedFiles(media);
+          if (filePaths.isNotEmpty) {
+            onFilesReceived(filePaths);
+          }
+        }
+      });
+    } catch (e) {
+      // Platform doesn't support sharing intent: $e
+    }
   }
 
   /// Process shared files by copying them to our app's directory

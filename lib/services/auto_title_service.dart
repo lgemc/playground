@@ -52,6 +52,16 @@ Output format: Just the filename, nothing else.''';
     return sanitized;
   }
 
+  /// Sanitize content for safe inclusion in prompts
+  String _sanitizeContent(String content) {
+    // Remove null bytes and other control characters that can break JSON
+    return content
+        .replaceAll('\x00', '')  // Remove null bytes
+        .replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), '')  // Remove other control chars
+        .replaceAll('\r\n', '\n')  // Normalize line endings
+        .trim();
+  }
+
   /// Generate a title for a file based on its content
   ///
   /// [content] - The text content to analyze
@@ -66,6 +76,9 @@ Output format: Just the filename, nothing else.''';
       throw ArgumentError('Content cannot be empty');
     }
 
+    // Sanitize content to avoid JSON encoding issues
+    final safeContent = _sanitizeContent(content);
+
     // Build context-aware prompt
     final contextInfo = currentFilename != null
         ? 'Current filename: $currentFilename\n\n'
@@ -76,27 +89,33 @@ Output format: Just the filename, nothing else.''';
         : 'This is a PDF document. Look for title-like content at the beginning.\n\n';
 
     final prompt = '''$contextInfo${fileTypeInfo}Content:
-$content
+$safeContent
 
 Generate a filename based on this content following the rules in the system prompt.''';
 
-    // Use content-only streaming to skip chain-of-thought reasoning
-    // This avoids the need to extract titles from quoted reasoning text
-    final buffer = StringBuffer();
-    await for (final chunk in _autocompletion.promptStreamContentOnly(
-      prompt,
-      systemPrompt: _systemPrompt,
-      temperature: 0.3,
-      maxTokens: 200,
-    )) {
-      buffer.write(chunk);
+    try {
+      // Use content-only streaming to skip chain-of-thought reasoning
+      // This avoids the need to extract titles from quoted reasoning text
+      final buffer = StringBuffer();
+      await for (final chunk in _autocompletion.promptStreamContentOnly(
+        prompt,
+        systemPrompt: _systemPrompt,
+        temperature: 0.3,
+        maxTokens: 200,
+      )) {
+        buffer.write(chunk);
+      }
+      final result = buffer.toString();
+
+      // Sanitize the result
+      final sanitized = _sanitizeFilename(result.trim());
+
+      return sanitized;
+    } catch (e) {
+      // If API fails, generate a safe fallback title
+      print('[AutoTitle] Error generating title: $e');
+      return _sanitizeFilename(currentFilename ?? 'Untitled');
     }
-    final result = buffer.toString();
-
-    // Sanitize the result
-    final sanitized = _sanitizeFilename(result.trim());
-
-    return sanitized;
   }
 
   /// Check if the service is configured

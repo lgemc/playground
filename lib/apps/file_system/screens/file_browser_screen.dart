@@ -481,13 +481,27 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   }
 
   void _openFileDirect(FileItem file) {
+    final filePath = FileSystemStorage.instance.getAbsolutePath(file);
+    final physicalFile = File(filePath);
+
+    // Check if file exists on disk (metadata may be synced but content not yet)
+    if (!physicalFile.existsSync()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('File not downloaded yet. Content sync coming soon!'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     // Check if it's a PDF file
     if (file.extension.toLowerCase() == 'pdf') {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => PdfReaderScreen(
-            filePath: FileSystemStorage.instance.getAbsolutePath(file),
+            filePath: filePath,
             fileName: file.name,
           ),
         ),

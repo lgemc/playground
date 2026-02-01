@@ -11,6 +11,10 @@ enum SyncMessageType {
   syncRequest,
   syncData,
   syncAck,
+  blobManifest,  // List of available blob hashes
+  blobRequest,   // Request specific blobs
+  blobData,      // Blob chunk
+  blobComplete,  // Blob transfer complete
   error,
 }
 
@@ -216,6 +220,58 @@ class SyncProtocol {
     ));
   }
 
+  /// Send blob manifest (list of available hashes)
+  Future<void> sendBlobManifest(List<String> hashes) async {
+    await send(SyncMessage(
+      type: SyncMessageType.blobManifest,
+      payload: {
+        'hashes': hashes,
+      },
+    ));
+  }
+
+  /// Request blobs by hash
+  Future<void> requestBlobs(List<String> hashes) async {
+    await send(SyncMessage(
+      type: SyncMessageType.blobRequest,
+      payload: {
+        'hashes': hashes,
+      },
+    ));
+  }
+
+  /// Send blob data in chunks
+  Future<void> sendBlob(String hash, String relativePath, List<int> data) async {
+    const chunkSize = 64 * 1024; // 64KB chunks
+    final totalChunks = (data.length / chunkSize).ceil();
+
+    for (var i = 0; i < totalChunks; i++) {
+      final start = i * chunkSize;
+      final end = (start + chunkSize < data.length) ? start + chunkSize : data.length;
+      final chunk = data.sublist(start, end);
+
+      await send(SyncMessage(
+        type: SyncMessageType.blobData,
+        payload: {
+          'hash': hash,
+          'relativePath': relativePath,
+          'chunkIndex': i,
+          'totalChunks': totalChunks,
+          'data': chunk,
+        },
+      ));
+    }
+
+    // Send completion message
+    await send(SyncMessage(
+      type: SyncMessageType.blobComplete,
+      payload: {
+        'hash': hash,
+        'relativePath': relativePath,
+      },
+    ));
+  }
+
   /// Dispose
   Future<void> dispose() async {
     await _dataSubscription?.cancel();
@@ -362,6 +418,101 @@ class SyncCoordinator {
       await applyChanges(appId, remoteEntities);
     } catch (e) {
       await _protocol.sendError(e.toString());
+    }
+  }
+
+  /// Sync blobs after metadata sync
+  Future<void> syncBlobs(
+    Future<List<String>> Function() getMissingHashes,
+    Future<List<int>?> Function(String hash) getBlobByHash,
+    Future<String?> Function(String hash) getRelativePathByHash,
+    Future<void> Function(String hash, List<int> data, String relativePath) storeBlob,
+  ) async {
+    try {
+      // Get list of hashes we need
+      final neededHashes = await getMissingHashes();
+
+      if (neededHashes.isEmpty) {
+        print('[BlobSync] No blobs needed');
+        return;
+      }
+
+      print('[BlobSync] Requesting ${neededHashes.length} blobs');
+      await _protocol.requestBlobs(neededHashes);
+
+      // Listen for incoming blobs
+      final blobBuffers = <String, List<List<int>>>{};
+      final blobMetadata = <String, Map<String, dynamic>>{};
+
+      await for (final message in _protocol.messages.timeout(
+        const Duration(seconds: 60),
+        onTimeout: (sink) => sink.close(),
+      )) {
+        if (message.type == SyncMessageType.blobData) {
+          final hash = message.payload['hash'] as String;
+          final relativePath = message.payload['relativePath'] as String;
+          final chunkIndex = message.payload['chunkIndex'] as int;
+          final data = (message.payload['data'] as List).cast<int>();
+
+          blobBuffers.putIfAbsent(hash, () => []);
+          blobMetadata[hash] = {'relativePath': relativePath};
+
+          // Ensure we have space for this chunk
+          while (blobBuffers[hash]!.length <= chunkIndex) {
+            blobBuffers[hash]!.add([]);
+          }
+          blobBuffers[hash]![chunkIndex] = data;
+
+        } else if (message.type == SyncMessageType.blobComplete) {
+          final hash = message.payload['hash'] as String;
+          final relativePath = blobMetadata[hash]?['relativePath'] as String;
+
+          // Assemble chunks
+          final completeBlob = <int>[];
+          for (final chunk in blobBuffers[hash]!) {
+            completeBlob.addAll(chunk);
+          }
+
+          // Store blob
+          await storeBlob(hash, completeBlob, relativePath);
+          print('[BlobSync] Received blob: $hash ($relativePath)');
+
+          // Clean up
+          blobBuffers.remove(hash);
+          blobMetadata.remove(hash);
+
+          // Check if all blobs received
+          if (blobBuffers.isEmpty) {
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      print('[BlobSync] Error: $e');
+    }
+  }
+
+  /// Handle blob requests (responder side)
+  Future<void> handleBlobRequest(
+    SyncMessage request,
+    Future<List<int>?> Function(String hash) getBlobByHash,
+    Future<String?> Function(String hash) getRelativePathByHash,
+  ) async {
+    try {
+      final hashes = (request.payload['hashes'] as List).cast<String>();
+
+      print('[BlobSync] Sending ${hashes.length} blobs');
+
+      for (final hash in hashes) {
+        final blob = await getBlobByHash(hash);
+        final relativePath = await getRelativePathByHash(hash);
+
+        if (blob != null && relativePath != null) {
+          await _protocol.sendBlob(hash, relativePath, blob);
+        }
+      }
+    } catch (e) {
+      print('[BlobSync] Error sending blobs: $e');
     }
   }
 }

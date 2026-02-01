@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import '../../../services/share_content.dart';
 import '../../../services/share_service.dart';
@@ -98,12 +99,53 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             ),
         ],
       ),
-      body: SfPdfViewer.file(
-        File(widget.filePath),
-        controller: _pdfViewerController,
-        enableTextSelection: true,
-        onTextSelectionChanged: _handleTextSelection,
-      ),
+      body: _buildPdfViewer(),
+    );
+  }
+
+  Widget _buildPdfViewer() {
+    // Syncfusion PDF viewer has issues on Linux - show a simple fallback
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.picture_as_pdf, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text(
+              'PDF: ${widget.fileName}',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Path: ${widget.filePath}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'PDF viewer not yet supported on desktop',
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton.icon(
+              onPressed: () {
+                // Open with system default PDF viewer
+                Process.run('xdg-open', [widget.filePath]);
+              },
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('Open with system viewer'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Use Syncfusion PDF viewer on mobile platforms
+    return SfPdfViewer.file(
+      File(widget.filePath),
+      controller: _pdfViewerController,
+      enableTextSelection: true,
+      onTextSelectionChanged: _handleTextSelection,
     );
   }
 }

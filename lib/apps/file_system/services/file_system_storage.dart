@@ -1,40 +1,26 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:mime/mime.dart';
 import 'package:crypto/crypto.dart';
 import '../models/file_item.dart';
 import '../models/folder_item.dart';
 import '../models/derivative_artifact.dart';
-import '../../../core/sync/services/device_id_service.dart';
+import '../../../core/database/crdt_database.dart';
 
 class FileSystemStorage {
   static final instance = FileSystemStorage._();
   FileSystemStorage._();
 
-  Database? _db;
+  bool _initialized = false;
   Directory? _storageDir;
   Directory? _derivativesDir;
-  String? _cachedDeviceId;
-
-  Database get db {
-    if (_db == null) {
-      throw StateError('FileSystemStorage not initialized. Call init() first.');
-    }
-    return _db!;
-  }
 
   Directory get storageDir {
     if (_storageDir == null) {
       throw StateError('FileSystemStorage not initialized. Call init() first.');
     }
     return _storageDir!;
-  }
-
-  Future<String> _getDeviceId() async {
-    _cachedDeviceId ??= await DeviceIdService.instance.getDeviceId();
-    return _cachedDeviceId!;
   }
 
   /// Compute SHA-256 hash of a file's content
@@ -45,6 +31,8 @@ class FileSystemStorage {
   }
 
   Future<void> init() async {
+    if (_initialized) return;
+
     final appDir = await getApplicationDocumentsDirectory();
     final dataDir = Directory(p.join(appDir.path, 'data', 'file_system'));
     await dataDir.create(recursive: true);
@@ -55,218 +43,56 @@ class FileSystemStorage {
     _derivativesDir = Directory(p.join(dataDir.path, 'derivatives'));
     await _derivativesDir!.create(recursive: true);
 
-    final dbPath = p.join(dataDir.path, 'file_system.db');
-    _db = await openDatabase(
-      dbPath,
-      version: 4,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE files (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            relative_path TEXT NOT NULL UNIQUE,
-            folder_path TEXT NOT NULL,
-            mime_type TEXT,
-            size INTEGER,
-            is_favorite INTEGER DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            deleted_at TEXT,
-            device_id TEXT DEFAULT '',
-            sync_version INTEGER DEFAULT 1,
-            content_hash TEXT
-          )
-        ''');
+    // Use CRDT database for sync support
+    await CrdtDatabase.instance.execute('''
+      CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        folder_path TEXT NOT NULL,
+        mime_type TEXT,
+        size INTEGER,
+        is_favorite INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        deleted_at INTEGER,
+        content_hash TEXT
+      )
+    ''');
 
-        await db.execute(
-          'CREATE INDEX idx_files_folder ON files(folder_path)',
-        );
-        await db.execute(
-          'CREATE INDEX idx_files_favorite ON files(is_favorite)',
-        );
-        await db.execute(
-          'CREATE INDEX idx_files_name ON files(name COLLATE NOCASE)',
-        );
-        await db.execute(
-          'CREATE INDEX idx_files_updated_at ON files(updated_at)',
-        );
-        await db.execute(
-          'CREATE INDEX idx_files_device_id ON files(device_id)',
-        );
+    await CrdtDatabase.instance.execute('''
+      CREATE TABLE IF NOT EXISTS derivatives (
+        id TEXT PRIMARY KEY NOT NULL,
+        file_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        derivative_path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        error_message TEXT
+      )
+    ''');
 
-        await db.execute('''
-          CREATE TABLE derivatives (
-            id TEXT PRIMARY KEY,
-            file_id TEXT NOT NULL,
-            type TEXT NOT NULL,
-            derivative_path TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            completed_at TEXT,
-            error_message TEXT,
-            FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
-          )
-        ''');
-
-        await db.execute(
-          'CREATE INDEX idx_derivatives_file_id ON derivatives(file_id)',
-        );
-        await db.execute(
-          'CREATE INDEX idx_derivatives_status ON derivatives(status)',
-        );
-
-        await db.execute('''
-          CREATE TABLE migration_status (
-            id TEXT PRIMARY KEY,
-            completed_at TEXT NOT NULL
-          )
-        ''');
-      },
-      onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) {
-          await db.execute('''
-            CREATE TABLE derivatives (
-              id TEXT PRIMARY KEY,
-              file_id TEXT NOT NULL,
-              type TEXT NOT NULL,
-              derivative_path TEXT NOT NULL,
-              status TEXT NOT NULL,
-              created_at TEXT NOT NULL,
-              completed_at TEXT,
-              error_message TEXT,
-              FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
-            )
-          ''');
-
-          await db.execute(
-            'CREATE INDEX idx_derivatives_file_id ON derivatives(file_id)',
-          );
-          await db.execute(
-            'CREATE INDEX idx_derivatives_status ON derivatives(status)',
-          );
-
-          await db.execute('''
-            CREATE TABLE migration_status (
-              id TEXT PRIMARY KEY,
-              completed_at TEXT NOT NULL
-            )
-          ''');
-
-          // Run migration from summaries app
-          await _migrateSummariesToDerivatives(appDir, db);
-        }
-
-        if (oldVersion < 3) {
-          // Add sync fields to files table
-          await db.execute('ALTER TABLE files ADD COLUMN deleted_at TEXT');
-          await db.execute('ALTER TABLE files ADD COLUMN device_id TEXT DEFAULT \'\'');
-          await db.execute('ALTER TABLE files ADD COLUMN sync_version INTEGER DEFAULT 1');
-
-          // Add indices for sync fields
-          await db.execute(
-            'CREATE INDEX idx_files_updated_at ON files(updated_at)',
-          );
-          await db.execute(
-            'CREATE INDEX idx_files_device_id ON files(device_id)',
-          );
-        }
-
-        if (oldVersion < 4) {
-          // Add content hash field for file change detection
-          await db.execute('ALTER TABLE files ADD COLUMN content_hash TEXT');
-        }
-      },
+    // Create indices
+    await CrdtDatabase.instance.execute(
+      'CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_path)',
     );
+    await CrdtDatabase.instance.execute(
+      'CREATE INDEX IF NOT EXISTS idx_files_favorite ON files(is_favorite)',
+    );
+    await CrdtDatabase.instance.execute(
+      'CREATE INDEX IF NOT EXISTS idx_files_name ON files(name COLLATE NOCASE)',
+    );
+    await CrdtDatabase.instance.execute(
+      'CREATE INDEX IF NOT EXISTS idx_derivatives_file_id ON derivatives(file_id)',
+    );
+    await CrdtDatabase.instance.execute(
+      'CREATE INDEX IF NOT EXISTS idx_derivatives_status ON derivatives(status)',
+    );
+
+    _initialized = true;
   }
 
-  Future<void> _migrateSummariesToDerivatives(
-    Directory appDir,
-    Database db,
-  ) async {
-    try {
-      // Check if migration already ran
-      final migrationCheck = await db.query(
-        'migration_status',
-        where: 'id = ?',
-        whereArgs: ['summaries_to_derivatives'],
-      );
-
-      if (migrationCheck.isNotEmpty) {
-        return; // Already migrated
-      }
-
-      // Open summaries database
-      final summariesDbPath =
-          p.join(appDir.path, 'data', 'summaries', 'summaries.db');
-      final summariesDbFile = File(summariesDbPath);
-
-      if (!await summariesDbFile.exists()) {
-        // No summaries to migrate
-        await db.insert('migration_status', {
-          'id': 'summaries_to_derivatives',
-          'completed_at': DateTime.now().toIso8601String(),
-        });
-        return;
-      }
-
-      final summariesDb = await openDatabase(summariesDbPath);
-
-      try {
-        // Get all summaries
-        final summaries = await summariesDb.query('summaries');
-
-        for (final summary in summaries) {
-          final fileId = summary['file_id'] as String;
-          final status = summary['status'] as String;
-          final createdAt = summary['created_at'] as String;
-          final completedAt = summary['completed_at'] as String?;
-          final errorMessage = summary['error_message'] as String?;
-          final summaryId = summary['id'] as String;
-
-          // Create derivative record
-          final derivativeId = summaryId;
-          final derivativePath =
-              p.join(_derivativesDir!.path, '$derivativeId.md');
-
-          await db.insert('derivatives', {
-            'id': derivativeId,
-            'file_id': fileId,
-            'type': 'summary',
-            'derivative_path': derivativePath,
-            'status': status,
-            'created_at': createdAt,
-            'completed_at': completedAt,
-            'error_message': errorMessage,
-          });
-
-          // Copy summary file if it exists
-          final oldSummaryPath = p.join(
-            appDir.path,
-            'data',
-            'summaries',
-            'summaries',
-            '$summaryId.md',
-          );
-          final oldFile = File(oldSummaryPath);
-
-          if (await oldFile.exists()) {
-            await oldFile.copy(derivativePath);
-          }
-        }
-      } finally {
-        await summariesDb.close();
-      }
-
-      // Mark migration as complete
-      await db.insert('migration_status', {
-        'id': 'summaries_to_derivatives',
-        'completed_at': DateTime.now().toIso8601String(),
-      });
-    } catch (e) {
-      // Log error but don't fail initialization
-      print('Error migrating summaries: $e');
-    }
-  }
 
   // === File Operations ===
 
@@ -301,7 +127,6 @@ class FileSystemStorage {
     final relativePath = targetFolderPath.isEmpty
         ? fileName
         : '$targetFolderPath$fileName';
-    final deviceId = await _getDeviceId();
     final contentHash = await _computeFileHash(targetFile);
 
     final fileItem = FileItem(
@@ -314,35 +139,54 @@ class FileSystemStorage {
       isFavorite: false,
       createdAt: now,
       updatedAt: now,
-      deviceId: deviceId,
-      syncVersion: 1,
       contentHash: contentHash,
     );
 
-    // Insert into database
-    await db.insert('files', fileItem.toMap());
+    // Insert into database using CRDT
+    await CrdtDatabase.instance.execute(
+      '''
+      INSERT INTO files (id, name, relative_path, folder_path, mime_type, size, is_favorite, created_at, updated_at, content_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ''',
+      [
+        fileItem.id,
+        fileItem.name,
+        fileItem.relativePath,
+        fileItem.folderPath,
+        fileItem.mimeType,
+        fileItem.size,
+        fileItem.isFavorite ? 1 : 0,
+        fileItem.createdAt.millisecondsSinceEpoch,
+        fileItem.updatedAt.millisecondsSinceEpoch,
+        fileItem.contentHash,
+      ],
+    );
 
     return fileItem;
   }
 
   Future<void> deleteFile(String id) async {
-    final files = await db.query('files', where: 'id = ?', whereArgs: [id]);
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE id = ?',
+      [id],
+    );
     if (files.isEmpty) return;
 
     final fileItem = FileItem.fromMap(files.first);
-    final deviceId = await _getDeviceId();
+    final now = DateTime.now();
 
     // Soft delete: mark as deleted instead of removing
-    await db.update(
-      'files',
-      {
-        'deleted_at': DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
-        'device_id': deviceId,
-        'sync_version': fileItem.syncVersion + 1,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
+    await CrdtDatabase.instance.execute(
+      '''
+      UPDATE files
+      SET deleted_at = ?, updated_at = ?
+      WHERE id = ?
+      ''',
+      [
+        now.millisecondsSinceEpoch,
+        now.millisecondsSinceEpoch,
+        id,
+      ],
     );
 
     // Still delete the actual file from disk
@@ -354,7 +198,10 @@ class FileSystemStorage {
   }
 
   Future<void> renameFile(String id, String newName) async {
-    final files = await db.query('files', where: 'id = ?', whereArgs: [id]);
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE id = ?',
+      [id],
+    );
     if (files.isEmpty) return;
 
     final fileItem = FileItem.fromMap(files.first);
@@ -369,20 +216,26 @@ class FileSystemStorage {
         ? newName
         : '${fileItem.folderPath}$newName';
 
-    await db.update(
-      'files',
-      {
-        'name': newName,
-        'relative_path': newRelativePath,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [id],
+    await CrdtDatabase.instance.execute(
+      '''
+      UPDATE files
+      SET name = ?, relative_path = ?, updated_at = ?
+      WHERE id = ?
+      ''',
+      [
+        newName,
+        newRelativePath,
+        DateTime.now().millisecondsSinceEpoch,
+        id,
+      ],
     );
   }
 
   Future<void> moveFile(String id, String newFolderPath) async {
-    final files = await db.query('files', where: 'id = ?', whereArgs: [id]);
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE id = ?',
+      [id],
+    );
     if (files.isEmpty) return;
 
     final fileItem = FileItem.fromMap(files.first);
@@ -400,31 +253,40 @@ class FileSystemStorage {
         ? fileItem.name
         : '$newFolderPath${fileItem.name}';
 
-    await db.update(
-      'files',
-      {
-        'folder_path': newFolderPath,
-        'relative_path': newRelativePath,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [id],
+    await CrdtDatabase.instance.execute(
+      '''
+      UPDATE files
+      SET folder_path = ?, relative_path = ?, updated_at = ?
+      WHERE id = ?
+      ''',
+      [
+        newFolderPath,
+        newRelativePath,
+        DateTime.now().millisecondsSinceEpoch,
+        id,
+      ],
     );
   }
 
   Future<void> toggleFavorite(String id) async {
-    final files = await db.query('files', where: 'id = ?', whereArgs: [id]);
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE id = ?',
+      [id],
+    );
     if (files.isEmpty) return;
 
     final fileItem = FileItem.fromMap(files.first);
-    await db.update(
-      'files',
-      {
-        'is_favorite': fileItem.isFavorite ? 0 : 1,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [id],
+    await CrdtDatabase.instance.execute(
+      '''
+      UPDATE files
+      SET is_favorite = ?, updated_at = ?
+      WHERE id = ?
+      ''',
+      [
+        fileItem.isFavorite ? 0 : 1,
+        DateTime.now().millisecondsSinceEpoch,
+        id,
+      ],
     );
   }
 
@@ -461,10 +323,9 @@ class FileSystemStorage {
     await oldDir.rename(newDir.path);
 
     // Update all files in this folder and subfolders
-    final files = await db.query(
-      'files',
-      where: 'folder_path LIKE ? OR folder_path = ?',
-      whereArgs: ['$oldPath%', oldPath],
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE folder_path LIKE ? OR folder_path = ?',
+      ['$oldPath%', oldPath],
     );
 
     for (final fileMap in files) {
@@ -474,15 +335,18 @@ class FileSystemStorage {
           ? file.name
           : '$newFolderPath${file.name}';
 
-      await db.update(
-        'files',
-        {
-          'folder_path': newFolderPath,
-          'relative_path': newRelativePath,
-          'updated_at': DateTime.now().toIso8601String(),
-        },
-        where: 'id = ?',
-        whereArgs: [file.id],
+      await CrdtDatabase.instance.execute(
+        '''
+        UPDATE files
+        SET folder_path = ?, relative_path = ?, updated_at = ?
+        WHERE id = ?
+        ''',
+        [
+          newFolderPath,
+          newRelativePath,
+          DateTime.now().millisecondsSinceEpoch,
+          file.id,
+        ],
       );
     }
   }
@@ -490,54 +354,92 @@ class FileSystemStorage {
   // === Queries ===
 
   Future<List<FileItem>> getFilesInFolder(String folderPath) async {
-    final results = await db.query(
-      'files',
-      where: 'folder_path = ? AND deleted_at IS NULL',
-      whereArgs: [folderPath],
-      orderBy: 'name COLLATE NOCASE',
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM files
+      WHERE folder_path = ? AND is_deleted = 0 AND deleted_at IS NULL
+      ORDER BY name COLLATE NOCASE
+      ''',
+      [folderPath],
     );
+
+    print('[FileSystem] getFilesInFolder("$folderPath") returned ${results.length} files');
+    if (results.isNotEmpty) {
+      print('[FileSystem] Files: ${results.map((r) => r['name']).toList()}');
+    }
 
     return results.map((m) => FileItem.fromMap(m)).toList();
   }
 
   Future<List<FolderItem>> getFoldersInPath(String folderPath) async {
-    final dir = Directory(p.join(storageDir.path, folderPath));
+    // Get folders from database metadata (files' folder_path column)
+    // This is important for sync: folders may exist in metadata before physical files arrive
+    final pattern = folderPath.isEmpty ? '%/' : '$folderPath%/';
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT DISTINCT folder_path FROM files
+      WHERE folder_path LIKE ? AND is_deleted = 0 AND deleted_at IS NULL
+      ''',
+      [pattern],
+    );
 
-    if (!dir.existsSync()) {
-      return [];
-    }
-
-    final folders = <FolderItem>[];
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
-        final name = p.basename(entity.path);
-        final path = folderPath.isEmpty ? '$name/' : '$folderPath$name/';
-        folders.add(FolderItem(name: name, path: path));
+    final folderPaths = <String>{};
+    for (final row in results) {
+      final path = row['folder_path'] as String;
+      // Extract immediate subfolder
+      if (folderPath.isEmpty) {
+        // Root level - get first segment
+        final firstSlash = path.indexOf('/');
+        if (firstSlash > 0) {
+          folderPaths.add(path.substring(0, firstSlash + 1));
+        }
+      } else {
+        // Subfolder level - get next segment after current path
+        if (path.startsWith(folderPath) && path.length > folderPath.length) {
+          final remainder = path.substring(folderPath.length);
+          final nextSlash = remainder.indexOf('/');
+          if (nextSlash > 0) {
+            folderPaths.add('$folderPath${remainder.substring(0, nextSlash + 1)}');
+          }
+        }
       }
     }
 
+    final folders = folderPaths.map((path) {
+      final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+      final name = parts.last;
+      return FolderItem(name: name, path: path);
+    }).toList();
+
     folders.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+    print('[FileSystem] getFoldersInPath("$folderPath") found ${folders.length} folders: ${folders.map((f) => f.name).toList()}');
+
     return folders;
   }
 
   Future<List<FileItem>> getFavorites() async {
-    final results = await db.query(
-      'files',
-      where: 'is_favorite = ? AND deleted_at IS NULL',
-      whereArgs: [1],
-      orderBy: 'name COLLATE NOCASE',
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM files
+      WHERE is_favorite = ? AND deleted_at IS NULL
+      ORDER BY name COLLATE NOCASE
+      ''',
+      [1],
     );
 
     return results.map((m) => FileItem.fromMap(m)).toList();
   }
 
   Future<List<FileItem>> search(String query) async {
-    final results = await db.query(
-      'files',
-      where: 'name LIKE ? AND deleted_at IS NULL',
-      whereArgs: ['%$query%'],
-      orderBy: 'name COLLATE NOCASE',
-      limit: 50,
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM files
+      WHERE name LIKE ? AND deleted_at IS NULL
+      ORDER BY name COLLATE NOCASE
+      LIMIT 50
+      ''',
+      ['%$query%'],
     );
 
     return results.map((m) => FileItem.fromMap(m)).toList();
@@ -546,7 +448,10 @@ class FileSystemStorage {
   // === Export ===
 
   Future<File> getFileForExport(String id) async {
-    final files = await db.query('files', where: 'id = ?', whereArgs: [id]);
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE id = ?',
+      [id],
+    );
     if (files.isEmpty) {
       throw Exception('File not found');
     }
@@ -562,11 +467,13 @@ class FileSystemStorage {
   // === Derivative Operations ===
 
   Future<List<DerivativeArtifact>> getDerivatives(String fileId) async {
-    final results = await db.query(
-      'derivatives',
-      where: 'file_id = ?',
-      whereArgs: [fileId],
-      orderBy: 'created_at DESC',
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM derivatives
+      WHERE file_id = ?
+      ORDER BY created_at DESC
+      ''',
+      [fileId],
     );
 
     return results.map((m) => DerivativeArtifact.fromJson(m)).toList();
@@ -589,7 +496,20 @@ class FileSystemStorage {
       createdAt: now,
     );
 
-    await db.insert('derivatives', derivative.toJson());
+    await CrdtDatabase.instance.execute(
+      '''
+      INSERT INTO derivatives (id, file_id, type, derivative_path, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ''',
+      [
+        derivative.id,
+        derivative.fileId,
+        derivative.type,
+        derivative.derivativePath,
+        derivative.status,
+        derivative.createdAt.millisecondsSinceEpoch,
+      ],
+    );
 
     return derivative;
   }
@@ -599,35 +519,42 @@ class FileSystemStorage {
     String? status,
     String? errorMessage,
   }) async {
-    final updates = <String, dynamic>{};
+    if (status == null && errorMessage == null) return;
+
+    final setParts = <String>[];
+    final values = <dynamic>[];
 
     if (status != null) {
-      updates['status'] = status;
+      setParts.add('status = ?');
+      values.add(status);
       if (status == 'completed') {
-        updates['completed_at'] = DateTime.now().toIso8601String();
+        setParts.add('completed_at = ?');
+        values.add(DateTime.now().millisecondsSinceEpoch);
       }
     }
 
     if (errorMessage != null) {
-      updates['error_message'] = errorMessage;
+      setParts.add('error_message = ?');
+      values.add(errorMessage);
     }
 
-    if (updates.isNotEmpty) {
-      await db.update(
-        'derivatives',
-        updates,
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-    }
+    values.add(id); // for WHERE clause
+
+    await CrdtDatabase.instance.execute(
+      '''
+      UPDATE derivatives
+      SET ${setParts.join(', ')}
+      WHERE id = ?
+      ''',
+      values,
+    );
   }
 
   Future<void> deleteDerivative(String id) async {
     // Get derivative info
-    final results = await db.query(
-      'derivatives',
-      where: 'id = ?',
-      whereArgs: [id],
+    final results = await CrdtDatabase.instance.query(
+      'SELECT * FROM derivatives WHERE id = ?',
+      [id],
     );
 
     if (results.isEmpty) return;
@@ -641,11 +568,14 @@ class FileSystemStorage {
     }
 
     // Delete from database
-    await db.delete('derivatives', where: 'id = ?', whereArgs: [id]);
+    await CrdtDatabase.instance.execute(
+      'DELETE FROM derivatives WHERE id = ?',
+      [id],
+    );
   }
 
   Future<bool> hasDerivatives(String fileId) async {
-    final result = await db.rawQuery(
+    final result = await CrdtDatabase.instance.query(
       'SELECT COUNT(*) as count FROM derivatives WHERE file_id = ?',
       [fileId],
     );
@@ -655,10 +585,9 @@ class FileSystemStorage {
   }
 
   Future<DerivativeArtifact?> getDerivative(String id) async {
-    final results = await db.query(
-      'derivatives',
-      where: 'id = ?',
-      whereArgs: [id],
+    final results = await CrdtDatabase.instance.query(
+      'SELECT * FROM derivatives WHERE id = ?',
+      [id],
     );
 
     if (results.isEmpty) return null;
@@ -690,15 +619,17 @@ class FileSystemStorage {
   }
 
   Future<void> close() async {
-    await _db?.close();
-    _db = null;
+    // CRDT database is managed globally, no need to close
   }
 
   // === Sync Operations ===
 
   /// Check if a file's content has changed by comparing its current hash
   Future<bool> hasFileContentChanged(String fileId) async {
-    final files = await db.query('files', where: 'id = ?', whereArgs: [fileId]);
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE id = ?',
+      [fileId],
+    );
     if (files.isEmpty) return false;
 
     final fileItem = FileItem.fromMap(files.first);
@@ -714,7 +645,10 @@ class FileSystemStorage {
 
   /// Update the content hash for a file (call after file content changes)
   Future<void> updateFileHash(String fileId) async {
-    final files = await db.query('files', where: 'id = ?', whereArgs: [fileId]);
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE id = ?',
+      [fileId],
+    );
     if (files.isEmpty) return;
 
     final fileItem = FileItem.fromMap(files.first);
@@ -723,104 +657,56 @@ class FileSystemStorage {
     if (!file.existsSync()) return;
 
     final newHash = await _computeFileHash(file);
-    final deviceId = await _getDeviceId();
 
-    await db.update(
-      'files',
-      {
-        'content_hash': newHash,
-        'updated_at': DateTime.now().toIso8601String(),
-        'device_id': deviceId,
-        'sync_version': fileItem.syncVersion + 1,
-      },
-      where: 'id = ?',
-      whereArgs: [fileId],
+    await CrdtDatabase.instance.execute(
+      '''
+      UPDATE files
+      SET content_hash = ?, updated_at = ?
+      WHERE id = ?
+      ''',
+      [
+        newHash,
+        DateTime.now().millisecondsSinceEpoch,
+        fileId,
+      ],
     );
   }
 
   /// Get file metadata changes since a given timestamp for sync
   Future<List<Map<String, dynamic>>> getChangesForSync(DateTime? since) async {
-    String whereClause;
-    List<dynamic> whereArgs;
-
     if (since != null) {
-      whereClause = 'updated_at > ?';
-      whereArgs = [since.toIso8601String()];
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM files
+        WHERE updated_at > ?
+        ORDER BY updated_at ASC
+        ''',
+        [since.millisecondsSinceEpoch],
+      );
+      return results;
     } else {
       // First sync - get all non-deleted files
-      whereClause = 'deleted_at IS NULL';
-      whereArgs = [];
-    }
-
-    final results = await db.query(
-      'files',
-      where: whereClause,
-      whereArgs: whereArgs,
-      orderBy: 'updated_at ASC',
-    );
-
-    return results;
-  }
-
-  /// Apply file metadata changes from remote device
-  Future<void> applyChangesFromSync(List<Map<String, dynamic>> entities) async {
-    for (final entity in entities) {
-      await _upsertFileMetadata(entity);
-    }
-  }
-
-  /// Insert or update file metadata (for sync, without actual file content)
-  Future<void> _upsertFileMetadata(Map<String, dynamic> metadata) async {
-    final id = metadata['id'] as String;
-    final existing = await db.query('files', where: 'id = ?', whereArgs: [id]);
-
-    if (existing.isEmpty) {
-      // New file - insert metadata
-      await db.insert('files', metadata);
-    } else {
-      // Existing file - use content-based conflict resolution
-      final localFile = FileItem.fromMap(existing.first);
-      final remoteVersion = metadata['sync_version'] as int? ?? 1;
-      final remoteHash = metadata['content_hash'] as String?;
-      final remoteUpdatedAt = metadata['updated_at'] as String?;
-
-      // Content-based strategy: Check if actual content differs
-      bool shouldUpdate = false;
-
-      if (remoteHash != null && localFile.contentHash != null) {
-        // Both have hashes - compare them
-        if (remoteHash != localFile.contentHash) {
-          // Content differs - use timestamp to decide
-          if (remoteUpdatedAt != null) {
-            final remoteTime = DateTime.parse(remoteUpdatedAt);
-            shouldUpdate = remoteTime.isAfter(localFile.updatedAt);
-          } else {
-            shouldUpdate = remoteVersion > localFile.syncVersion;
-          }
-        }
-        // If hashes match, no update needed (same content)
-      } else {
-        // Fall back to version-based resolution
-        shouldUpdate = remoteVersion > localFile.syncVersion;
-      }
-
-      if (shouldUpdate) {
-        await db.update(
-          'files',
-          metadata,
-          where: 'id = ?',
-          whereArgs: [id],
-        );
-      }
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM files
+        WHERE deleted_at IS NULL
+        ORDER BY updated_at ASC
+        ''',
+        [],
+      );
+      return results;
     }
   }
 
   /// Get files that exist in metadata but missing actual file content
   Future<List<FileItem>> getFilesNeedingContent() async {
-    final results = await db.query(
-      'files',
-      where: 'deleted_at IS NULL',
-      orderBy: 'updated_at DESC',
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM files
+      WHERE deleted_at IS NULL
+      ORDER BY updated_at DESC
+      ''',
+      [],
     );
 
     final filesNeedingContent = <FileItem>[];
@@ -836,5 +722,68 @@ class FileSystemStorage {
     }
 
     return filesNeedingContent;
+  }
+
+  /// Get file by content hash
+  Future<FileItem?> getFileByHash(String hash) async {
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM files
+      WHERE content_hash = ? AND deleted_at IS NULL
+      LIMIT 1
+      ''',
+      [hash],
+    );
+
+    return results.isNotEmpty ? FileItem.fromMap(results.first) : null;
+  }
+
+  /// Get relative path for a file by its content hash
+  Future<String?> getRelativePathByHash(String hash) async {
+    final file = await getFileByHash(hash);
+    return file?.relativePath;
+  }
+
+  /// Get blob bytes by content hash
+  Future<List<int>?> getBlobByHash(String hash) async {
+    final file = await getFileByHash(hash);
+    if (file == null) return null;
+
+    final ioFile = File(p.join(storageDir.path, file.relativePath));
+    if (!ioFile.existsSync()) return null;
+
+    return ioFile.readAsBytes();
+  }
+
+  /// Store blob from remote device
+  Future<void> storeBlobByHash(String hash, List<int> data, String relativePath) async {
+    final filePath = p.join(storageDir.path, relativePath);
+    final file = File(filePath);
+
+    print('[FileSystem] Storing blob to: $filePath (${data.length} bytes)');
+
+    // Create parent directories
+    await file.parent.create(recursive: true);
+
+    // Write blob
+    await file.writeAsBytes(data);
+
+    // Verify hash
+    final actualHash = await _computeFileHash(file);
+    if (actualHash != hash) {
+      await file.delete();
+      throw Exception('Hash mismatch: expected $hash, got $actualHash');
+    }
+
+    print('[FileSystem] Blob stored and verified: $relativePath');
+  }
+
+  /// Get list of hashes we need based on metadata
+  Future<List<String>> getMissingBlobHashes() async {
+    final files = await getFilesNeedingContent();
+    return files
+        .where((f) => f.contentHash != null)
+        .map((f) => f.contentHash!)
+        .toList();
   }
 }

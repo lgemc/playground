@@ -9,8 +9,6 @@ class FileItem {
   final DateTime createdAt;
   final DateTime updatedAt;
   final DateTime? deletedAt;
-  final String deviceId;
-  final int syncVersion;
   final String? contentHash;
 
   FileItem({
@@ -24,8 +22,6 @@ class FileItem {
     required this.createdAt,
     required this.updatedAt,
     this.deletedAt,
-    this.deviceId = '',
-    this.syncVersion = 1,
     this.contentHash,
   });
 
@@ -48,15 +44,20 @@ class FileItem {
       mimeType: map['mime_type'] as String?,
       size: map['size'] as int,
       isFavorite: (map['is_favorite'] as int) == 1,
-      createdAt: DateTime.parse(map['created_at'] as String),
-      updatedAt: DateTime.parse(map['updated_at'] as String),
-      deletedAt: map['deleted_at'] != null
-          ? DateTime.parse(map['deleted_at'] as String)
-          : null,
-      deviceId: map['device_id'] as String? ?? '',
-      syncVersion: map['sync_version'] as int? ?? 1,
+      createdAt: _parseTimestamp(map['created_at']),
+      updatedAt: _parseTimestamp(map['updated_at']),
+      deletedAt: map['deleted_at'] != null ? _parseTimestamp(map['deleted_at']) : null,
       contentHash: map['content_hash'] as String?,
     );
+  }
+
+  static DateTime _parseTimestamp(dynamic value) {
+    if (value is int) {
+      return DateTime.fromMillisecondsSinceEpoch(value);
+    } else if (value is String) {
+      return DateTime.parse(value);
+    }
+    throw ArgumentError('Invalid timestamp format: $value');
   }
 
   Map<String, dynamic> toMap() {
@@ -68,11 +69,9 @@ class FileItem {
       'mime_type': mimeType,
       'size': size,
       'is_favorite': isFavorite ? 1 : 0,
-      'created_at': createdAt.toIso8601String(),
-      'updated_at': updatedAt.toIso8601String(),
-      'deleted_at': deletedAt?.toIso8601String(),
-      'device_id': deviceId,
-      'sync_version': syncVersion,
+      'created_at': createdAt.millisecondsSinceEpoch,
+      'updated_at': updatedAt.millisecondsSinceEpoch,
+      'deleted_at': deletedAt?.millisecondsSinceEpoch,
       'content_hash': contentHash,
     };
   }
@@ -88,8 +87,6 @@ class FileItem {
     DateTime? createdAt,
     DateTime? updatedAt,
     DateTime? deletedAt,
-    String? deviceId,
-    int? syncVersion,
     String? contentHash,
   }) {
     return FileItem(
@@ -103,8 +100,6 @@ class FileItem {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       deletedAt: deletedAt ?? this.deletedAt,
-      deviceId: deviceId ?? this.deviceId,
-      syncVersion: syncVersion ?? this.syncVersion,
       contentHash: contentHash ?? this.contentHash,
     );
   }

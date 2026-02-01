@@ -26,8 +26,8 @@ class DerivativeArtifact {
       'type': type,
       'derivative_path': derivativePath,
       'status': status,
-      'created_at': createdAt.toIso8601String(),
-      'completed_at': completedAt?.toIso8601String(),
+      'created_at': createdAt.millisecondsSinceEpoch,
+      'completed_at': completedAt?.millisecondsSinceEpoch,
       'error_message': errorMessage,
     };
   }
@@ -39,12 +39,21 @@ class DerivativeArtifact {
       type: json['type'] as String,
       derivativePath: json['derivative_path'] as String,
       status: json['status'] as String,
-      createdAt: DateTime.parse(json['created_at'] as String),
+      createdAt: _parseTimestamp(json['created_at']),
       completedAt: json['completed_at'] != null
-          ? DateTime.parse(json['completed_at'] as String)
+          ? _parseTimestamp(json['completed_at'])
           : null,
       errorMessage: json['error_message'] as String?,
     );
+  }
+
+  static DateTime _parseTimestamp(dynamic value) {
+    if (value is int) {
+      return DateTime.fromMillisecondsSinceEpoch(value);
+    } else if (value is String) {
+      return DateTime.parse(value);
+    }
+    throw ArgumentError('Invalid timestamp format: $value');
   }
 
   DerivativeArtifact copyWith({

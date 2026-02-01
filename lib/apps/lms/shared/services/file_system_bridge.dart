@@ -1,5 +1,6 @@
 import '../../../file_system/models/file_item.dart';
 import '../../../file_system/services/file_system_storage.dart';
+import '../../../../core/database/crdt_database.dart';
 
 /// Bridge service for LMS apps to interact with the file system app.
 /// This provides a clean interface for querying files by ID.
@@ -14,10 +15,9 @@ class FileSystemBridge {
   /// Get a file by its ID.
   Future<FileItem?> getFileById(String fileId) async {
     try {
-      final results = await _storage.db.query(
-        'files',
-        where: 'id = ?',
-        whereArgs: [fileId],
+      final results = await CrdtDatabase.instance.query(
+        'SELECT * FROM files WHERE id = ? AND deleted_at IS NULL',
+        [fileId],
       );
 
       if (results.isEmpty) return null;
@@ -39,9 +39,9 @@ class FileSystemBridge {
   /// Get all available files for selection.
   Future<List<FileItem>> getAvailableFiles() async {
     try {
-      final results = await _storage.db.query(
-        'files',
-        orderBy: 'name COLLATE NOCASE',
+      final results = await CrdtDatabase.instance.query(
+        'SELECT * FROM files WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE',
+        [],
       );
 
       return results.map((m) => FileItem.fromMap(m)).toList();
@@ -53,11 +53,13 @@ class FileSystemBridge {
   /// Get files filtered by mime type prefix (e.g., "image/", "video/", "audio/").
   Future<List<FileItem>> getFilesByMimeType(String mimeTypePrefix) async {
     try {
-      final results = await _storage.db.query(
-        'files',
-        where: 'mime_type LIKE ?',
-        whereArgs: ['$mimeTypePrefix%'],
-        orderBy: 'name COLLATE NOCASE',
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM files
+        WHERE mime_type LIKE ? AND deleted_at IS NULL
+        ORDER BY name COLLATE NOCASE
+        ''',
+        ['$mimeTypePrefix%'],
       );
 
       return results.map((m) => FileItem.fromMap(m)).toList();

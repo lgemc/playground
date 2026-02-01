@@ -8,6 +8,7 @@ import 'device_id_service.dart';
 import 'connection_service.dart';
 import 'socket_connection.dart';
 import 'sync_protocol.dart';
+import '../../../apps/file_system/services/file_system_storage.dart';
 
 /// Callback for getting changes from an app
 typedef GetChangesCallback = Future<List<Map<String, dynamic>>> Function(
@@ -137,6 +138,8 @@ class DeviceSyncService {
 
   /// Sync a specific app with a device
   Future<SyncResult> syncApp(String appId, Device device) async {
+    print('[Sync] syncApp called with appId: "$appId"');
+
     if (_getChangesCallback == null || _applyChangesCallback == null) {
       throw StateError(
         'Callbacks not set. Call setGetChangesCallback and setApplyChangesCallback first.',
@@ -161,7 +164,7 @@ class DeviceSyncService {
       // Create sync coordinator
       final coordinator = SyncCoordinator(protocol);
 
-      // Perform sync
+      // Perform metadata sync
       final result = await coordinator.syncApp(
         appId,
         lastSyncTime,
@@ -174,6 +177,13 @@ class DeviceSyncService {
         await _updateLastSyncTime(appId, device.id);
       }
 
+      // Perform blob sync for file_system when syncing crdt_database
+      if (appId == 'crdt_database' && result.success) {
+        print('[Sync] Checking if file blobs need syncing...');
+        await _syncFileBlobs(coordinator);
+        print('[Sync] Blob sync check completed');
+      }
+
       // Clean up
       await protocol.dispose();
 
@@ -184,6 +194,23 @@ class DeviceSyncService {
       );
     }
   }
+
+  /// Sync file blobs after metadata sync (initiator side)
+  Future<void> _syncFileBlobs(SyncCoordinator coordinator) async {
+    try {
+      final storage = FileSystemStorage.instance;
+
+      await coordinator.syncBlobs(
+        () => storage.getMissingBlobHashes(),
+        (hash) => storage.getBlobByHash(hash),
+        (hash) => storage.getRelativePathByHash(hash),
+        (hash, data, relativePath) => storage.storeBlobByHash(hash, data, relativePath),
+      );
+    } catch (e) {
+      print('[Sync] Blob sync error: $e');
+    }
+  }
+
 
   /// Sync all apps with a device
   Future<List<SyncResult>> syncAllApps(Device device, List<String> appIds) async {
@@ -229,23 +256,40 @@ class DeviceSyncService {
       // Handle ONE sync per connection - simpler and more reliable
 
       try {
+        String? syncedAppId;
         await for (final message in protocol.messages.timeout(
-          const Duration(seconds: 30),
+          const Duration(seconds: 60),
           onTimeout: (sink) {
             sink.close();
           },
         )) {
 
           if (message.type == SyncMessageType.syncRequest) {
+            syncedAppId = message.payload['appId'] as String;
             await coordinator.handleSyncRequest(
               message,
               (appId, since) => _getChangesCallback!(appId, since),
               (appId, entities) => _applyChangesCallback!(appId, entities),
             );
-            break; // ONE sync per connection
+
+            // Don't break - continue listening for blob requests
+            if (syncedAppId == 'crdt_database') {
+              print('[Sync] Metadata sync done, waiting for blob requests...');
+            }
+          } else if (message.type == SyncMessageType.blobRequest && syncedAppId == 'crdt_database') {
+            print('[Sync] Received blob request, processing...');
+            final storage = FileSystemStorage.instance;
+            await coordinator.handleBlobRequest(
+              message,
+              (hash) => storage.getBlobByHash(hash),
+              (hash) => storage.getRelativePathByHash(hash),
+            );
+            print('[Sync] Blob request handled, closing connection');
+            break; // Done with blob sync
           }
         }
       } catch (e) {
+        print('[Sync] Error in incoming connection handler: $e');
       } finally {
         // Always clean up
         await protocol.dispose();
