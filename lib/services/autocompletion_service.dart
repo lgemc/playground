@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:openai_dart/openai_dart.dart';
 import 'config_service.dart';
 import '../core/tool.dart';
+import 'sse_stream_client.dart';
 
 /// Configuration keys for the autocompletion service (global scope)
 class AutocompletionConfig {
@@ -281,9 +282,6 @@ class AutocompletionService {
 
     final client = _getClient();
 
-    print('DEBUG: Creating stream with model=$effectiveModel, maxTokens=$effectiveMaxTokens, temp=$effectiveTemperature');
-    print('DEBUG: Messages count: ${messages.length}');
-
     final stream = client.createChatCompletionStream(
       request: CreateChatCompletionRequest(
         model: ChatCompletionModel.modelId(effectiveModel),
@@ -300,14 +298,70 @@ class AutocompletionService {
       // For reasoning models: prefer content, but fallback to reasoningContent if content is never sent
       // Some vLLM reasoning models ONLY stream reasoningContent in streaming mode
       final delta = choice.delta?.content ?? choice.delta?.reasoningContent;
-      final finishReason = choice.finishReason;
-
-      if (finishReason != null) {
-        print('Stream finished. Reason: $finishReason');
-      }
 
       if (delta != null && delta.isNotEmpty) {
         yield delta;
+      }
+    }
+  }
+
+  /// Generate a streaming completion with proper separation of reasoning and content.
+  ///
+  /// Uses raw SSE parsing to correctly handle vLLM reasoning models that send
+  /// chain-of-thought in `reasoning_content` and final answer in `content`.
+  ///
+  /// Set [contentOnly] to true to only yield main content (skip reasoning).
+  /// This is useful for structured outputs like definitions where you only want
+  /// the final answer without chain-of-thought.
+  Stream<StreamChunk> completeStreamStructured(
+    List<ChatMessage> messages, {
+    String? model,
+    int? maxTokens,
+    double? temperature,
+    bool contentOnly = false,
+  }) async* {
+    if (!isConfigured) {
+      throw StateError(
+        'AutocompletionService not configured. Set ${AutocompletionConfig.apiKey} in config.',
+      );
+    }
+
+    final config = ConfigService.instance;
+    final effectiveModel =
+        model ?? config.get(AutocompletionConfig.model) ?? AutocompletionConfig.defaultModel;
+    final effectiveMaxTokens = maxTokens ??
+        int.tryParse(config.get(AutocompletionConfig.maxTokens) ?? '') ??
+        int.parse(AutocompletionConfig.defaultMaxTokens);
+    final effectiveTemperature = temperature ??
+        double.tryParse(config.get(AutocompletionConfig.temperature) ?? '') ??
+        double.parse(AutocompletionConfig.defaultTemperature);
+    final baseUrl = config.get(AutocompletionConfig.baseUrl) ??
+        AutocompletionConfig.defaultBaseUrl;
+    final apiKey = config.get(AutocompletionConfig.apiKey) ?? '';
+
+    final sseClient = SseStreamClient(
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+    );
+
+    final openAIMessages = messages.map((m) => {
+      'role': m.role.name,
+      'content': m.content,
+    }).toList();
+
+    await for (final chunk in sseClient.streamChatCompletion(
+      model: effectiveModel,
+      messages: openAIMessages,
+      temperature: effectiveTemperature,
+      maxTokens: effectiveMaxTokens,
+    )) {
+      if (contentOnly) {
+        // Only yield chunks with main content (skip reasoning)
+        if (chunk.hasContent || chunk.isDone) {
+          yield chunk;
+        }
+      } else {
+        yield chunk;
       }
     }
   }
@@ -402,8 +456,6 @@ class AutocompletionService {
       // Check if stream is done
       final finishReason = choice.finishReason;
       if (finishReason != null) {
-        print('Stream finished. Reason: $finishReason');
-
         // If finished with tool_calls, emit the tool call events
         if (finishReason == ChatCompletionFinishReason.toolCalls) {
           for (final builder in toolCallsInProgress.values) {
@@ -414,8 +466,8 @@ class AutocompletionService {
                 if (argsString.isNotEmpty) {
                   args = jsonDecode(argsString) as Map<String, dynamic>;
                 }
-              } catch (e) {
-                print('Error parsing tool call arguments: $e');
+              } catch (_) {
+                // Skip malformed arguments
               }
               yield ToolCallEvent(builder.id!, builder.name!, args);
             }
@@ -471,6 +523,37 @@ class AutocompletionService {
       maxTokens: maxTokens,
       temperature: temperature,
     );
+  }
+
+  /// Simple streaming completion with structured output (content only, no reasoning)
+  ///
+  /// Uses raw SSE streaming to properly separate reasoning from content.
+  /// Only yields main content chunks, filtering out chain-of-thought reasoning.
+  /// This is ideal for structured outputs like titles, definitions, etc.
+  Stream<String> promptStreamContentOnly(
+    String prompt, {
+    String? systemPrompt,
+    String? model,
+    int? maxTokens,
+    double? temperature,
+  }) async* {
+    final messages = <ChatMessage>[
+      if (systemPrompt != null)
+        ChatMessage(role: MessageRole.system, content: systemPrompt),
+      ChatMessage(role: MessageRole.user, content: prompt),
+    ];
+
+    await for (final chunk in completeStreamStructured(
+      messages,
+      model: model,
+      maxTokens: maxTokens,
+      temperature: temperature,
+      contentOnly: true,
+    )) {
+      if (chunk.hasContent) {
+        yield chunk.content!;
+      }
+    }
   }
 
   /// Update API configuration

@@ -26,6 +26,8 @@ class DeviceDiscoveryService {
   bool _isDiscovering = false;
   bool _multicastLockAcquired = false;
 
+  int _actualSyncPort = _syncPort;
+
   DeviceDiscoveryService(this._deviceIdService);
 
   /// Stream of discovered devices
@@ -33,6 +35,11 @@ class DeviceDiscoveryService {
 
   /// Get currently discovered devices
   List<Device> get devices => _discoveredDevices.values.toList();
+
+  /// Set the actual sync port being used
+  void setSyncPort(int port) {
+    _actualSyncPort = port;
+  }
 
   /// Start advertising this device on the network
   Future<void> startAdvertising() async {
@@ -44,11 +51,9 @@ class DeviceDiscoveryService {
         try {
           await _multicastChannel.invokeMethod('acquire');
           _multicastLockAcquired = true;
-          print('Multicast lock acquired on Android');
           // Small delay to ensure lock is fully active
           await Future.delayed(const Duration(milliseconds: 100));
         } catch (e) {
-          print('Failed to acquire multicast lock: $e');
           rethrow;
         }
       }
@@ -59,27 +64,23 @@ class DeviceDiscoveryService {
       final myIpAddress = await _getLocalIpAddress();
 
       if (myIpAddress == null) {
-        print('Cannot advertise: no local IP address found');
         return;
       }
 
       // Create separate sockets for listening and sending
       // Listen socket: bound to discovery port, reuses address for multiple instances
-      // On Android, we need reusePort: true to enable broadcast sending
       _listenSocket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         _discoveryPort,
         reuseAddress: true,
-        reusePort: Platform.isAndroid,  // Enable on Android for broadcast support
+        reusePort: false,  // reusePort not supported on all Android versions
       );
 
       _listenSocket!.broadcastEnabled = true;
-      print('Listen socket bound to ${_listenSocket!.address.address}:${_listenSocket!.port}, broadcast enabled: ${_listenSocket!.broadcastEnabled}');
 
       // On Android, use the listen socket for sending too
       if (Platform.isAndroid) {
         _sendSocket = _listenSocket;
-        print('Android: Using listen socket for both send and receive');
       }
 
       // Listen for all broadcast messages (both discovery requests and announcements)
@@ -105,7 +106,6 @@ class DeviceDiscoveryService {
                 await _processDeviceAnnouncement(data);
               }
             } catch (e) {
-              print('[$myDeviceName] Error processing broadcast: $e');
             }
           }
         }
@@ -126,13 +126,10 @@ class DeviceDiscoveryService {
 
         // Verify broadcast is enabled
         if (!_sendSocket!.broadcastEnabled) {
-          print('WARNING: Broadcast could not be enabled on send socket!');
         }
 
-        print('Send socket bound to ${_sendSocket!.address.address}:${_sendSocket!.port}, broadcast: ${_sendSocket!.broadcastEnabled}');
       }
 
-      print('Advertising device: $myDeviceName ($myDeviceId) at $myIpAddress:$_syncPort');
 
       // Periodic advertisement
       _broadcastTimer = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -142,7 +139,6 @@ class DeviceDiscoveryService {
       // Initial advertisement
       _sendAdvertisement(myDeviceId, myDeviceName, myIpAddress);
     } catch (e) {
-      print('Error starting advertising: $e');
       rethrow;
     }
   }
@@ -154,7 +150,7 @@ class DeviceDiscoveryService {
         'deviceId': deviceId,
         'name': deviceName,
         'ipAddress': ipAddress,
-        'port': _syncPort,
+        'port': _actualSyncPort,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       });
 
@@ -170,7 +166,6 @@ class DeviceDiscoveryService {
       } else {
         // Use Dart socket for non-Android platforms
         if (_sendSocket == null) {
-          print('Send socket is null, cannot send advertisement');
           return;
         }
 
@@ -185,10 +180,8 @@ class DeviceDiscoveryService {
             _discoveryPort,
           );
           if (bytes1 == 0) {
-            print('ERROR: Failed to send to 255.255.255.255 - returned $bytes1 bytes');
           }
         } catch (e) {
-          print('ERROR sending to 255.255.255.255: $e');
         }
 
         final subnetBroadcast = _getSubnetBroadcast(ipAddress);
@@ -201,17 +194,13 @@ class DeviceDiscoveryService {
               _discoveryPort,
             );
             if (bytes2 == 0) {
-              print('ERROR: Failed to send to $subnetBroadcast - returned $bytes2 bytes');
             }
           } catch (e) {
-            print('ERROR sending to $subnetBroadcast: $e');
           }
         }
 
-        print('Sent advertisement: $bytes1 bytes to 255.255.255.255:$_discoveryPort, $bytes2 bytes to $subnetBroadcast:$_discoveryPort');
       }
     } catch (e) {
-      print('Error sending advertisement: $e');
     }
   }
 
@@ -222,9 +211,7 @@ class DeviceDiscoveryService {
         'address': address,
         'port': _discoveryPort,
       });
-      print('Sent $bytes bytes to $address:$_discoveryPort via native');
     } catch (e) {
-      print('ERROR sending native broadcast to $address: $e');
     }
   }
 
@@ -255,9 +242,7 @@ class DeviceDiscoveryService {
       try {
         await _multicastChannel.invokeMethod('release');
         _multicastLockAcquired = false;
-        print('Multicast lock released on Android');
       } catch (e) {
-        print('Failed to release multicast lock: $e');
       }
     }
   }
@@ -298,12 +283,9 @@ class DeviceDiscoveryService {
           InternetAddress('255.255.255.255'),
           _discoveryPort,
         );
-        print('Sent discovery request from $myDeviceId');
       } else {
-        print('WARNING: Cannot send discovery request - send socket is null');
       }
     } catch (e) {
-      print('Error sending discovery request: $e');
     }
   }
 
@@ -372,7 +354,6 @@ class DeviceDiscoveryService {
 
       return null;
     } catch (e) {
-      print('Error getting local IP: $e');
       return null;
     }
   }

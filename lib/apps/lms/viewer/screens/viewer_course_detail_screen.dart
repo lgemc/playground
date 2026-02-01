@@ -12,7 +12,7 @@ class ViewerCourseDetailScreen extends StatefulWidget {
 }
 
 class _ViewerCourseDetailScreenState extends State<ViewerCourseDetailScreen> {
-  final _storage = LmsStorageService.instance;
+  final _storage = LmsCrdtStorageService.instance;
   Course? _course;
   bool _isLoading = true;
 

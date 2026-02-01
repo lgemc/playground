@@ -16,16 +16,11 @@ class ChatTitleService {
   final _queueService = QueueService.instance;
   final _logger = Logger(appId: 'chat_title', appName: 'Chat Title Service');
 
-  ChatStorage? _storage;
   String? _subscriptionId;
 
   /// Initialize and start listening to the chat title queue
-  Future<void> init({
-    required ChatStorage storage,
-  }) async {
+  Future<void> init() async {
     if (_subscriptionId != null) return;
-
-    _storage = storage;
 
     await _queueService.init();
 
@@ -53,7 +48,7 @@ class ChatTitleService {
           severity: LogSeverity.info);
 
       // Load the chat from storage
-      final chat = await _storage!.getChat(chatId);
+      final chat = await ChatStorage.instance.getChat(chatId);
       if (chat == null) {
         _logger.log('Chat not found: $chatId', severity: LogSeverity.error);
         return false;
@@ -71,7 +66,7 @@ class ChatTitleService {
       }
 
       // Get all messages for the chat
-      final messages = await _storage!.getMessages(chatId);
+      final messages = await ChatStorage.instance.getMessages(chatId);
       _logger.log('Found ${messages.length} messages for chat $chatId',
           severity: LogSeverity.debug);
       if (messages.isEmpty) {
@@ -137,10 +132,10 @@ $truncatedText
 Title:''';
 
     final autocompletionService = AutocompletionService.instance;
-    // Use streaming since non-streaming returns null content for some providers
+    // Use content-only streaming to skip chain-of-thought reasoning
     final buffer = StringBuffer();
     await for (final chunk
-        in autocompletionService.promptStream(prompt, maxTokens: 60)) {
+        in autocompletionService.promptStreamContentOnly(prompt, maxTokens: 60)) {
       buffer.write(chunk);
     }
     final response = buffer.toString();
@@ -190,7 +185,7 @@ Title:''';
   Future<void> _updateChatTitle(String chatId, String title) async {
     _logger.log('Updating chat $chatId with title: "$title"',
         severity: LogSeverity.debug);
-    final chat = await _storage!.getChat(chatId);
+    final chat = await ChatStorage.instance.getChat(chatId);
     if (chat == null) {
       _logger.log('Chat $chatId not found during update!',
           severity: LogSeverity.error);
@@ -203,10 +198,10 @@ Title:''';
       isTitleGenerating: false,
       updatedAt: DateTime.now(),
     );
-    await _storage!.updateChat(updatedChat);
+    await ChatStorage.instance.updateChat(updatedChat);
 
     // Verify the update
-    final verifyChat = await _storage!.getChat(chatId);
+    final verifyChat = await ChatStorage.instance.getChat(chatId);
     _logger.log('Chat after update - title: "${verifyChat?.title}"',
         severity: LogSeverity.debug);
 

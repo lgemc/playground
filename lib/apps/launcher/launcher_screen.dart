@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/app_registry.dart';
 import '../../core/sub_app.dart';
 import 'widgets/app_icon.dart';
+import 'widgets/global_sync_dialog.dart';
 
 /// Main screen for the launcher displaying all registered apps in a grid.
 class LauncherScreen extends StatelessWidget {
@@ -18,6 +19,18 @@ class LauncherScreen extends StatelessWidget {
           child: apps.isEmpty ? _buildEmptyState(context) : _buildAppGrid(context, apps),
         ),
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showGlobalSync(context),
+        tooltip: 'Sync Database',
+        child: const Icon(Icons.sync),
+      ),
+    );
+  }
+
+  void _showGlobalSync(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => const GlobalSyncDialog(),
     );
   }
 

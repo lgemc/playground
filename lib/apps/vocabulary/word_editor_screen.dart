@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/logger.dart';
 import 'models/word.dart';
-import 'services/vocabulary_storage_v2.dart';
+import 'services/vocabulary_storage.dart';
 import 'services/vocabulary_streaming_service.dart';
 
 final _logger = Logger(appId: 'vocabulary', appName: 'Vocabulary');
@@ -153,7 +153,7 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
 
       // Check for duplicates if the word text changed
       if (wordChanged) {
-        final duplicate = await VocabularyStorageV2.instance.findDuplicateWord(
+        final duplicate = await VocabularyStorage.instance.findDuplicateWord(
           wordText,
           excludeId: widget.word.id,
         );
@@ -190,7 +190,7 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
         updatedAt: DateTime.now(),
       );
 
-      await VocabularyStorageV2.instance.saveWord(
+      await VocabularyStorage.instance.saveWord(
         updatedWord,
         wordChanged: wordChanged,
       );

@@ -173,7 +173,7 @@ class QueueConfigs {
       name: 'Derivative Processor',
       eventPatterns: ['derivative.create'],
       maxRetries: 3,
-      lockTimeoutSeconds: 120, // Derivatives can take longer
+      lockTimeoutSeconds: 600, // Long timeout for video transcription
     ),
     // Catch-all queue for unmatched events (disabled by default)
     QueueConfig(

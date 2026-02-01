@@ -5,7 +5,7 @@ import '../../core/tool.dart';
 import '../../services/share_content.dart';
 import '../../services/tool_service.dart';
 import 'models/word.dart';
-import 'services/vocabulary_storage_v2.dart';
+import 'services/vocabulary_storage.dart';
 import 'vocabulary_screen.dart';
 
 /// Configuration keys for the vocabulary app
@@ -69,7 +69,7 @@ class VocabularyApp extends SubApp {
 
     // Check for duplicates
     final duplicate =
-        await VocabularyStorageV2.instance.findDuplicateWord(wordText);
+        await VocabularyStorage.instance.findDuplicateWord(wordText);
     if (duplicate != null) {
       return ToolResult.success({
         'status': 'exists',
@@ -82,7 +82,7 @@ class VocabularyApp extends SubApp {
       meaning: meaning,
       updatedAt: DateTime.now(),
     );
-    await VocabularyStorageV2.instance.saveWord(word, wordChanged: meaning.isEmpty);
+    await VocabularyStorage.instance.saveWord(word, wordChanged: meaning.isEmpty);
 
     return ToolResult.success({
       'status': 'created',
@@ -111,7 +111,7 @@ class VocabularyApp extends SubApp {
       if (text.isNotEmpty) {
         // Create new word entry from shared text
         final word = Word.create(word: text);
-        await VocabularyStorageV2.instance.saveWord(word);
+        await VocabularyStorage.instance.saveWord(word);
       }
     }
   }

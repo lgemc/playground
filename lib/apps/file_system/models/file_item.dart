@@ -8,6 +8,10 @@ class FileItem {
   final bool isFavorite;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final DateTime? deletedAt;
+  final String deviceId;
+  final int syncVersion;
+  final String? contentHash;
 
   FileItem({
     required this.id,
@@ -19,6 +23,10 @@ class FileItem {
     required this.isFavorite,
     required this.createdAt,
     required this.updatedAt,
+    this.deletedAt,
+    this.deviceId = '',
+    this.syncVersion = 1,
+    this.contentHash,
   });
 
   String get extension => name.contains('.') ? name.split('.').last : '';
@@ -42,6 +50,12 @@ class FileItem {
       isFavorite: (map['is_favorite'] as int) == 1,
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),
+      deletedAt: map['deleted_at'] != null
+          ? DateTime.parse(map['deleted_at'] as String)
+          : null,
+      deviceId: map['device_id'] as String? ?? '',
+      syncVersion: map['sync_version'] as int? ?? 1,
+      contentHash: map['content_hash'] as String?,
     );
   }
 
@@ -56,6 +70,10 @@ class FileItem {
       'is_favorite': isFavorite ? 1 : 0,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'deleted_at': deletedAt?.toIso8601String(),
+      'device_id': deviceId,
+      'sync_version': syncVersion,
+      'content_hash': contentHash,
     };
   }
 
@@ -69,6 +87,10 @@ class FileItem {
     bool? isFavorite,
     DateTime? createdAt,
     DateTime? updatedAt,
+    DateTime? deletedAt,
+    String? deviceId,
+    int? syncVersion,
+    String? contentHash,
   }) {
     return FileItem(
       id: id ?? this.id,
@@ -80,6 +102,10 @@ class FileItem {
       isFavorite: isFavorite ?? this.isFavorite,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      deviceId: deviceId ?? this.deviceId,
+      syncVersion: syncVersion ?? this.syncVersion,
+      contentHash: contentHash ?? this.contentHash,
     );
   }
 }

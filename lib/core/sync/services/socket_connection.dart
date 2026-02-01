@@ -65,15 +65,35 @@ class SocketConnectionService implements ConnectionService {
   String? _myDeviceId;
   String? _myDeviceName;
 
+  /// Get the actual port being used for listening
+  int? get listeningPort => _serverSocket?.port;
+
   @override
   Future<void> startListening(int port) async {
-    if (_serverSocket != null) return;
+    if (_serverSocket != null) {
+      return;
+    }
 
-    _serverSocket = await ServerSocket.bind(
-      InternetAddress.anyIPv4,
-      port,
-      shared: true,
-    );
+
+    try {
+      _serverSocket = await ServerSocket.bind(
+        InternetAddress.anyIPv4,
+        port,
+        shared: true,
+      );
+    } on SocketException catch (e) {
+      // If port is already in use, try with a random port
+      if (e.osError?.errorCode == 98 || e.message.contains('Address already in use')) {
+        _serverSocket = await ServerSocket.bind(
+          InternetAddress.anyIPv4,
+          0, // 0 = random available port
+          shared: true,
+        );
+      } else {
+        rethrow;
+      }
+    }
+
 
     _serverSocket!.listen((socket) {
       // For incoming connections, we need to receive device info first
@@ -132,6 +152,7 @@ class SocketConnectionService implements ConnectionService {
       device.port!,
       timeout: const Duration(seconds: 10),
     );
+
 
     // Create connection immediately - handshake happens at protocol level
     final connection = SocketConnection(socket, device);

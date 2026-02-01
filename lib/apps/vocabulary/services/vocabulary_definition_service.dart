@@ -4,7 +4,7 @@ import '../../../services/logger.dart';
 import '../../../services/queue_consumer.dart';
 import '../../../services/queue_message.dart';
 import '../vocabulary_app.dart';
-import 'vocabulary_storage_v2.dart';
+import 'vocabulary_storage.dart';
 import 'vocabulary_streaming_service.dart';
 
 /// Service that listens to vocabulary queue and fetches definitions using LLM.
@@ -96,7 +96,7 @@ class VocabularyDefinitionService extends QueueConsumer {
       }
 
       // Verify word still exists
-      final existingWord = await VocabularyStorageV2.instance.getWord(wordId);
+      final existingWord = await VocabularyStorage.instance.getWord(wordId);
       if (existingWord == null) {
         await _logger.warning(
           'Word no longer exists, skipping definition lookup',
@@ -110,7 +110,7 @@ class VocabularyDefinitionService extends QueueConsumer {
       final result = await _fetchDefinition(wordText, wordId: wordId);
 
       if (result != null) {
-        await VocabularyStorageV2.instance.updateWordDefinition(
+        await VocabularyStorage.instance.updateWordDefinition(
           wordId,
           meaning: result.meaning,
           samplePhrases: result.samplePhrases,
@@ -238,34 +238,29 @@ EXAMPLES:
         },
       );
 
-      // Collect the streamed response
+      // Use structured streaming that properly separates reasoning from content
+      // contentOnly=true skips chain-of-thought reasoning and only yields final content
       final buffer = StringBuffer();
       var charCount = 0;
-      var meaningMarkerFound = false;
 
-      await for (final chunk in autocompletion.completeStream([
+      await for (final chunk in autocompletion.completeStreamStructured([
         ChatMessage(role: MessageRole.system, content: systemPrompt),
         ChatMessage(role: MessageRole.user, content: userPrompt),
-      ])) {
-        buffer.write(chunk);
-        charCount += chunk.length;
+      ], contentOnly: true)) {
+        // Only process main content (reasoning is filtered by contentOnly: true)
+        if (chunk.hasContent) {
+          buffer.write(chunk.content);
+          charCount += chunk.content!.length;
 
-        // Check if we've found the MEANING: marker
-        if (!meaningMarkerFound && buffer.toString().contains('MEANING:')) {
-          meaningMarkerFound = true;
-        }
-
-        // Only emit UI updates after we find the MEANING: marker to skip reasoning
-        if (meaningMarkerFound && wordId != null) {
-          _emitStreamingUpdate(wordId, buffer.toString());
+          // Emit streaming updates to UI
+          if (wordId != null) {
+            _emitStreamingUpdate(wordId, buffer.toString());
+          }
         }
       }
 
       stopwatch.stop();
-      final rawContent = buffer.toString();
-
-      // Clean reasoning text from response if present
-      final content = _cleanReasoningFromResponse(rawContent);
+      final content = buffer.toString();
 
       await _logger.info(
         'LLM streaming completed',
@@ -275,13 +270,12 @@ EXAMPLES:
           'durationMs': stopwatch.elapsedMilliseconds,
           'responseLength': content.length,
           'charCount': charCount,
-          'meaningMarkerFound': meaningMarkerFound,
         },
       );
 
       await _logger.debug(
-        'LLM raw response',
-        eventType: 'llm_response_raw',
+        'LLM response',
+        eventType: 'llm_response',
         metadata: {
           'word': word,
           'content': content.length > 500
@@ -398,41 +392,10 @@ EXAMPLES:
     }
   }
 
-  /// Clean reasoning text from response
-  /// Reasoning models may include chain-of-thought before the actual answer
-  String _cleanReasoningFromResponse(String content) {
-    // If the content starts with "MEANING:", it's already clean
-    if (content.trim().startsWith('MEANING:')) {
-      return content;
-    }
-
-    // Look for "MEANING:" marker and extract everything from there
-    // This removes any chain-of-thought reasoning that appears before the actual answer
-    final meaningIndex = content.indexOf('MEANING:');
-    if (meaningIndex != -1) {
-      return content.substring(meaningIndex);
-    }
-
-    // Fallback: look for the pattern where MEANING: appears after reasoning quotes
-    // e.g., "..." then "EXAMPLES:" ... MEANING: actual definition
-    final lines = content.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].trim().startsWith('MEANING:')) {
-        return lines.skip(i).join('\n');
-      }
-    }
-
-    // No MEANING: found - return as-is (will likely fail parsing)
-    return content;
-  }
-
   /// Emit streaming updates by parsing current buffer content
   void _emitStreamingUpdate(String wordId, String content) {
     final streaming = VocabularyStreamingService.instance;
-
-    // Clean reasoning from content before parsing
-    final cleanedContent = _cleanReasoningFromResponse(content);
-    final parsed = _parsePartialResponse(cleanedContent);
+    final parsed = _parsePartialResponse(content);
 
     if (parsed.meaning.isNotEmpty) {
       streaming.setMeaning(wordId, parsed.meaning);

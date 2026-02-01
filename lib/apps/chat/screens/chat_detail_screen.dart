@@ -14,13 +14,11 @@ import '../../../services/tool_service.dart';
 import '../theme/chat_theme.dart';
 
 class ChatDetailScreen extends StatefulWidget {
-  final ChatStorage storage;
   final Chat chat;
   final VoidCallback onChatUpdated;
 
   const ChatDetailScreen({
     super.key,
-    required this.storage,
     required this.chat,
     required this.onChatUpdated,
   });
@@ -74,7 +72,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   Future<void> _loadMessages() async {
-    final messages = await widget.storage.getMessages(widget.chat.id);
+    final messages = await ChatStorage.instance.getMessages(widget.chat.id);
     setState(() {
       _messages.clear();
       _messages.addAll(messages);
@@ -108,7 +106,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       createdAt: DateTime.now(),
     );
 
-    await widget.storage.createMessage(message);
+    await ChatStorage.instance.createMessage(message);
     _messageController.clear();
 
     setState(() {
@@ -118,7 +116,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
     // Update chat's updatedAt timestamp
     final updatedChat = _currentChat.copyWith(updatedAt: DateTime.now());
-    await widget.storage.updateChat(updatedChat);
+    await ChatStorage.instance.updateChat(updatedChat);
     setState(() {
       _currentChat = updatedChat;
     });
@@ -145,15 +143,35 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   Future<void> _shareText(String text) async {
-    final content = ShareContent.text(
+    // Share selected text as markdown note to preserve formatting
+    final content = ShareContent.note(
       sourceAppId: 'chat',
-      text: text,
+      title: '',
+      body: text,
+      format: 'markdown',
     );
 
     final success = await ShareService.instance.share(context, content);
     if (success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Text shared successfully')),
+      );
+    }
+  }
+
+  Future<void> _shareMessage(Message message) async {
+    // Share the full message as a markdown note
+    final content = ShareContent.note(
+      sourceAppId: 'chat',
+      title: message.isUser ? 'Chat message' : 'AI response',
+      body: message.content,
+      format: 'markdown',
+    );
+
+    final success = await ShareService.instance.share(context, content);
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Message shared successfully')),
       );
     }
   }
@@ -186,7 +204,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         final errorMessage = aiMessage.copyWith(
           content: 'AI service not configured. Please set your LLM API key in Settings.',
         );
-        await widget.storage.createMessage(errorMessage);
+        await ChatStorage.instance.createMessage(errorMessage);
         setState(() {
           _messages[_messages.length - 1] = errorMessage;
           _isGeneratingResponse = false;
@@ -239,7 +257,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 'AI Response completed - Length: ${finalContent.length} chars');
 
             final finalMessage = aiMessage.copyWith(content: finalContent);
-            await widget.storage.createMessage(finalMessage);
+            await ChatStorage.instance.createMessage(finalMessage);
 
             setState(() {
               _messages[_messages.length - 1] = finalMessage;
@@ -295,7 +313,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         }
 
         final updatedChat = _currentChat.copyWith(updatedAt: DateTime.now());
-        await widget.storage.updateChat(updatedChat);
+        await ChatStorage.instance.updateChat(updatedChat);
         setState(() {
           _currentChat = updatedChat;
         });
@@ -305,7 +323,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         final errorMessage = aiMessage.copyWith(
           content: 'Error generating AI response: ${e.toString()}',
         );
-        await widget.storage.createMessage(errorMessage);
+        await ChatStorage.instance.createMessage(errorMessage);
         setState(() {
           _messages[_messages.length - 1] = errorMessage;
           _isGeneratingResponse = false;
@@ -325,7 +343,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         if (didPop) {
           if (!_hasUserSentMessage) {
             // Delete the chat if no message was sent
-            await widget.storage.deleteChat(_currentChat.id);
+            await ChatStorage.instance.deleteChat(_currentChat.id);
             widget.onChatUpdated();
           } else {
             _enqueueTitleGeneration();
@@ -425,18 +443,50 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         constraints: BoxConstraints(
           maxWidth: MediaQuery.of(context).size.width * 0.9,
         ),
-        decoration: BoxDecoration(
-          color: isUser ? ChatTheme.userBubble : ChatTheme.aiBubble,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: MarkdownBody(
-          data: message.content,
-          shrinkWrap: true,
-          styleSheet: isUser ? ChatTheme.userMarkdownStyle : ChatTheme.aiMarkdownStyle,
+        child: Column(
+          crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: isUser ? ChatTheme.userBubble : ChatTheme.aiBubble,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: MarkdownBody(
+                data: message.content,
+                shrinkWrap: true,
+                styleSheet: isUser ? ChatTheme.userMarkdownStyle : ChatTheme.aiMarkdownStyle,
+              ),
+            ),
+            // Share button below message
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: GestureDetector(
+                onTap: () => _shareMessage(message),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.share_outlined,
+                      size: 14,
+                      color: Colors.grey[500],
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Share',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[500],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/app_registry.dart';
 import 'models/note.dart';
 import 'note_editor_screen.dart';
-import 'services/notes_storage_v2.dart';
+import 'services/notes_storage.dart';
 import 'widgets/note_list_tile.dart';
 
 class NotesScreen extends StatefulWidget {
@@ -14,40 +14,13 @@ class NotesScreen extends StatefulWidget {
 }
 
 class _NotesScreenState extends State<NotesScreen> {
-  List<Note> _notes = [];
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadNotes();
-  }
-
-  Future<void> _loadNotes() async {
-    setState(() => _isLoading = true);
-    try {
-      final notes = await NotesStorageV2.instance.loadNotes();
-      setState(() {
-        _notes = notes;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading notes: $e')),
-        );
-      }
-    }
-  }
-
   Future<void> _createNote() async {
     final note = Note.create();
     await _openEditor(note, isNew: true);
   }
 
   Future<void> _openEditor(Note note, {bool isNew = false}) async {
-    final result = await Navigator.of(context).push<bool>(
+    await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (context) => NoteEditorScreen(
           note: note,
@@ -55,16 +28,13 @@ class _NotesScreenState extends State<NotesScreen> {
         ),
       ),
     );
-
-    if (result == true) {
-      _loadNotes();
-    }
+    // No need to manually reload - the Stream will update automatically
   }
 
   Future<void> _deleteNote(Note note) async {
     try {
-      await NotesStorageV2.instance.deleteNote(note.id);
-      _loadNotes();
+      await NotesStorage.instance.deleteNote(note.id);
+      // No need to manually reload - the Stream will update automatically
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -90,62 +60,90 @@ class _NotesScreenState extends State<NotesScreen> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: StreamBuilder<List<Note>>(
+        stream: NotesStorage.instance.watchNotes(),
+        builder: (context, snapshot) {
+          print('[NotesScreen] StreamBuilder state: ${snapshot.connectionState}, hasData: ${snapshot.hasData}, hasError: ${snapshot.hasError}');
+
+          if (snapshot.hasError) {
+            print('[NotesScreen] Error: ${snapshot.error}');
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Error loading notes',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${snapshot.error}',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).hintColor,
+                        ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          if (!snapshot.hasData) {
+            print('[NotesScreen] Waiting for data...');
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final notes = snapshot.data!;
+
+          if (notes.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.note_add,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No notes yet',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tap + to create your first note',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).hintColor,
+                        ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return ListView.separated(
+            itemCount: notes.length,
+            separatorBuilder: (context, index) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final note = notes[index];
+              return NoteListTile(
+                note: note,
+                onTap: () => _openEditor(note),
+                onDelete: () => _deleteNote(note),
+              );
+            },
+          );
+        },
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: _createNote,
         child: const Icon(Icons.add),
-      ),
-    );
-  }
-
-  Widget _buildBody() {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_notes.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.note_add,
-              size: 64,
-              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No notes yet',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Tap + to create your first note',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).hintColor,
-                  ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _loadNotes,
-      child: ListView.separated(
-        itemCount: _notes.length,
-        separatorBuilder: (context, index) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          final note = _notes[index];
-          return NoteListTile(
-            note: note,
-            onTap: () async {
-              final fullNote = await NotesStorageV2.instance.loadFullNote(note.id);
-              _openEditor(fullNote);
-            },
-            onDelete: () => _deleteNote(note),
-          );
-        },
       ),
     );
   }

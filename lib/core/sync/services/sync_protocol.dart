@@ -108,7 +108,11 @@ class SyncProtocol {
 
       final message = SyncMessage.tryParse(messageBytes);
       if (message != null) {
+        if (message.type == SyncMessageType.error) {
+        } else {
+        }
         _messageController.add(message);
+      } else {
       }
     }
   }
@@ -135,7 +139,13 @@ class SyncProtocol {
     // Wait for acknowledgment with extended timeout
     final ack = await messages
         .firstWhere((msg) => msg.type == SyncMessageType.handshakeAck)
-        .timeout(const Duration(seconds: 30));
+        .timeout(
+          const Duration(seconds: 30),
+          onTimeout: () {
+            throw TimeoutException('Handshake ACK timeout');
+          },
+        );
+
 
     if (ack.payload['status'] != 'ok') {
       throw Exception('Handshake failed: ${ack.payload['error']}');
@@ -156,8 +166,9 @@ class SyncProtocol {
   /// Send sync data (entities)
   Future<void> sendSyncData(
     String appId,
-    List<Map<String, dynamic>> entities,
-  ) async {
+    List<Map<String, dynamic>> entities, {
+    bool waitForAck = true,
+  }) async {
     // Send in batches to avoid large messages
     const batchSize = 100;
 
@@ -175,10 +186,12 @@ class SyncProtocol {
         },
       ));
 
-      // Wait for acknowledgment with extended timeout
-      await messages
-          .firstWhere((msg) => msg.type == SyncMessageType.syncAck)
-          .timeout(const Duration(seconds: 60));
+      // Wait for acknowledgment with extended timeout (optional)
+      if (waitForAck) {
+        await messages
+            .firstWhere((msg) => msg.type == SyncMessageType.syncAck)
+            .timeout(const Duration(seconds: 60));
+      }
     }
   }
 
@@ -236,13 +249,18 @@ class SyncCoordinator {
       final localChanges = await getChanges(lastSyncTime);
       entitiesSent = localChanges.length;
 
-      // Send local changes
-      await _protocol.sendSyncData(appId, localChanges);
+      // Send local changes (don't wait for ACK to avoid consuming messages from stream)
+      await _protocol.sendSyncData(appId, localChanges, waitForAck: false);
 
       // Receive remote changes
       final remoteEntities = <Map<String, dynamic>>[];
 
-      await for (final message in _protocol.messages) {
+      await for (final message in _protocol.messages.timeout(
+        const Duration(seconds: 30),
+        onTimeout: (sink) {
+          sink.close();
+        },
+      )) {
         if (message.type == SyncMessageType.syncData) {
           if (message.payload['appId'] == appId) {
             final entities = (message.payload['entities'] as List)
@@ -295,10 +313,25 @@ class SyncCoordinator {
           ? DateTime.parse(lastSyncTimeStr)
           : null;
 
-      // Listen for incoming data
+
+      // Get and send local changes FIRST (before receiving)
+      final localChanges = await getChanges(appId, lastSyncTime);
+      await _protocol.sendSyncData(appId, localChanges, waitForAck: false);
+
+      // Now listen for incoming data
       final remoteEntities = <Map<String, dynamic>>[];
 
-      await for (final message in _protocol.messages) {
+
+      // Use a subscription instead of await-for to have better control
+      bool receivedAllData = false;
+      final subscription = _protocol.messages.timeout(
+        const Duration(seconds: 5),
+        onTimeout: (sink) {
+          receivedAllData = true;
+          sink.close();
+        },
+      ).listen((message) async {
+
         if (message.type == SyncMessageType.syncData) {
           if (message.payload['appId'] == appId) {
             final entities = (message.payload['entities'] as List)
@@ -312,18 +345,21 @@ class SyncCoordinator {
             final batchIndex = message.payload['batchIndex'] as int;
             final totalBatches = message.payload['totalBatches'] as int;
             if (batchIndex == totalBatches - 1) {
-              break;
+              receivedAllData = true;
             }
           }
+        } else if (message.type == SyncMessageType.syncAck) {
+        } else {
+          receivedAllData = true;
         }
-      }
+      });
+
+      // Wait for completion or timeout
+      await subscription.asFuture().catchError((_) => null);
+      await subscription.cancel();
 
       // Apply remote changes
       await applyChanges(appId, remoteEntities);
-
-      // Get and send local changes
-      final localChanges = await getChanges(appId, lastSyncTime);
-      await _protocol.sendSyncData(appId, localChanges);
     } catch (e) {
       await _protocol.sendError(e.toString());
     }

@@ -1,135 +1,255 @@
-import 'dart:io';
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
 import '../models/chat.dart';
 import '../models/message.dart';
+import '../../../core/database/crdt_database.dart';
+import '../../../core/sync/services/device_id_service.dart';
+import '../../../core/app_bus.dart';
+import '../../../core/app_event.dart';
 
+/// Storage service using CRDT database for sync support
 class ChatStorage {
-  Database? _database;
+  static ChatStorage? _instance;
+  static ChatStorage get instance => _instance ??= ChatStorage._();
 
-  Future<void> init() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    final dataDir = Directory('${appDir.path}/data/chat');
-    if (!await dataDir.exists()) {
-      await dataDir.create(recursive: true);
-    }
+  ChatStorage._();
 
-    final dbPath = join(dataDir.path, 'chats.db');
-    _database = await openDatabase(
-      dbPath,
-      version: 1,
-      onCreate: _onCreate,
-    );
-  }
-
-  Future<void> _onCreate(Database db, int version) async {
-    await db.execute('''
-      CREATE TABLE chats (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL,
-        isTitleGenerating INTEGER NOT NULL DEFAULT 0
-      )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE messages (
-        id TEXT PRIMARY KEY,
-        chatId TEXT NOT NULL,
-        content TEXT NOT NULL,
-        isUser INTEGER NOT NULL,
-        createdAt TEXT NOT NULL,
-        FOREIGN KEY (chatId) REFERENCES chats (id) ON DELETE CASCADE
-      )
-    ''');
-
-    await db.execute('''
-      CREATE INDEX idx_messages_chatId ON messages(chatId)
-    ''');
-  }
-
-  Future<void> dispose() async {
-    await _database?.close();
-  }
-
-  // Chat operations
-  Future<void> createChat(Chat chat) async {
-    await _database!.insert('chats', chat.toMap());
-  }
-
-  Future<void> updateChat(Chat chat) async {
-    await _database!.update(
-      'chats',
-      chat.toMap(),
-      where: 'id = ?',
-      whereArgs: [chat.id],
-    );
-  }
-
-  Future<void> deleteChat(String chatId) async {
-    await _database!.delete(
-      'chats',
-      where: 'id = ?',
-      whereArgs: [chatId],
-    );
-  }
-
+  /// Load all chats
   Future<List<Chat>> getAllChats() async {
-    final List<Map<String, dynamic>> maps = await _database!.query(
-      'chats',
-      orderBy: 'updatedAt DESC',
-    );
-    return List.generate(maps.length, (i) => Chat.fromMap(maps[i]));
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, title, created_at, updated_at, is_title_generating
+      FROM chats
+      WHERE deleted_at IS NULL
+      ORDER BY updated_at DESC
+    ''');
+
+    return results.map((row) {
+      return Chat(
+        id: row['id'] as String,
+        title: row['title'] as String,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+        isTitleGenerating: (row['is_title_generating'] as int) == 1,
+      );
+    }).toList();
   }
 
+  /// Load a specific chat by ID
   Future<Chat?> getChat(String chatId) async {
-    final List<Map<String, dynamic>> maps = await _database!.query(
-      'chats',
-      where: 'id = ?',
-      whereArgs: [chatId],
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, title, created_at, updated_at, is_title_generating
+      FROM chats
+      WHERE id = ? AND deleted_at IS NULL
+    ''', [chatId]);
+
+    if (results.isEmpty) return null;
+
+    final row = results.first;
+    return Chat(
+      id: row['id'] as String,
+      title: row['title'] as String,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+      isTitleGenerating: (row['is_title_generating'] as int) == 1,
     );
-    if (maps.isEmpty) return null;
-    return Chat.fromMap(maps.first);
   }
 
+  /// Create a new chat
+  Future<void> createChat(Chat chat) async {
+    final deviceId = await DeviceIdService.instance.getDeviceId();
+
+    await CrdtDatabase.instance.execute('''
+      INSERT OR REPLACE INTO chats (
+        id, title, created_at, updated_at, is_title_generating, deleted_at, device_id, sync_version
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)
+    ''', [
+      chat.id,
+      chat.title,
+      chat.createdAt.millisecondsSinceEpoch,
+      chat.updatedAt.millisecondsSinceEpoch,
+      chat.isTitleGenerating ? 1 : 0,
+      deviceId,
+    ]);
+
+    await AppBus.instance.emit(AppEvent.create(
+      type: 'chat.created',
+      appId: 'chat',
+      metadata: {
+        'chatId': chat.id,
+        'title': chat.title,
+      },
+    ));
+  }
+
+  /// Update an existing chat
+  Future<void> updateChat(Chat chat) async {
+    final deviceId = await DeviceIdService.instance.getDeviceId();
+
+    // Get current sync version
+    final existing = await CrdtDatabase.instance.query('''
+      SELECT sync_version FROM chats WHERE id = ?
+    ''', [chat.id]);
+
+    if (existing.isEmpty) return;
+
+    final syncVersion = (existing.first['sync_version'] as int) + 1;
+
+    await CrdtDatabase.instance.execute('''
+      UPDATE chats
+      SET title = ?, updated_at = ?, is_title_generating = ?, device_id = ?, sync_version = ?
+      WHERE id = ?
+    ''', [
+      chat.title,
+      chat.updatedAt.millisecondsSinceEpoch,
+      chat.isTitleGenerating ? 1 : 0,
+      deviceId,
+      syncVersion,
+      chat.id,
+    ]);
+
+    await AppBus.instance.emit(AppEvent.create(
+      type: 'chat.updated',
+      appId: 'chat',
+      metadata: {
+        'chatId': chat.id,
+        'title': chat.title,
+      },
+    ));
+  }
+
+  /// Delete a chat (soft delete)
+  Future<void> deleteChat(String chatId) async {
+    final deviceId = await DeviceIdService.instance.getDeviceId();
+    final now = DateTime.now();
+
+    // Get current sync version
+    final existing = await CrdtDatabase.instance.query('''
+      SELECT sync_version FROM chats WHERE id = ?
+    ''', [chatId]);
+
+    if (existing.isEmpty) return;
+
+    final syncVersion = (existing.first['sync_version'] as int) + 1;
+
+    // Soft delete chat
+    await CrdtDatabase.instance.execute('''
+      UPDATE chats
+      SET deleted_at = ?, updated_at = ?, device_id = ?, sync_version = ?
+      WHERE id = ?
+    ''', [
+      now.millisecondsSinceEpoch,
+      now.millisecondsSinceEpoch,
+      deviceId,
+      syncVersion,
+      chatId,
+    ]);
+
+    // Soft delete all messages in the chat
+    await CrdtDatabase.instance.execute('''
+      UPDATE messages
+      SET deleted_at = ?, device_id = ?, sync_version = sync_version + 1
+      WHERE chat_id = ? AND deleted_at IS NULL
+    ''', [
+      now.millisecondsSinceEpoch,
+      deviceId,
+      chatId,
+    ]);
+
+    await AppBus.instance.emit(AppEvent.create(
+      type: 'chat.deleted',
+      appId: 'chat',
+      metadata: {'chatId': chatId},
+    ));
+  }
+
+  /// Search chats by keyword
   Future<List<Chat>> searchChats(String keyword) async {
-    final List<Map<String, dynamic>> maps = await _database!.query(
-      'chats',
-      where: 'title LIKE ?',
-      whereArgs: ['%$keyword%'],
-      orderBy: 'updatedAt DESC',
-    );
-    return List.generate(maps.length, (i) => Chat.fromMap(maps[i]));
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, title, created_at, updated_at, is_title_generating
+      FROM chats
+      WHERE deleted_at IS NULL AND title LIKE ?
+      ORDER BY updated_at DESC
+    ''', ['%$keyword%']);
+
+    return results.map((row) {
+      return Chat(
+        id: row['id'] as String,
+        title: row['title'] as String,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+        isTitleGenerating: (row['is_title_generating'] as int) == 1,
+      );
+    }).toList();
   }
 
-  // Message operations
-  Future<void> createMessage(Message message) async {
-    print('[ChatStorage] createMessage: id=${message.id}, content="${message.content.length > 50 ? '${message.content.substring(0, 50)}...' : message.content}", isUser=${message.isUser}');
-    await _database!.insert('messages', message.toMap());
-  }
-
+  /// Get all messages for a chat
   Future<List<Message>> getMessages(String chatId) async {
-    final List<Map<String, dynamic>> maps = await _database!.query(
-      'messages',
-      where: 'chatId = ?',
-      whereArgs: [chatId],
-      orderBy: 'createdAt ASC',
-    );
-    final messages = List.generate(maps.length, (i) => Message.fromMap(maps[i]));
-    print('[ChatStorage] getMessages($chatId): ${messages.length} messages');
-    for (final m in messages) {
-      print('[ChatStorage]   - id=${m.id}, content="${m.content.length > 50 ? '${m.content.substring(0, 50)}...' : m.content}", isUser=${m.isUser}');
-    }
-    return messages;
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, chat_id, content, is_user, created_at
+      FROM messages
+      WHERE chat_id = ? AND deleted_at IS NULL
+      ORDER BY created_at ASC
+    ''', [chatId]);
+
+    return results.map((row) {
+      return Message(
+        id: row['id'] as String,
+        chatId: row['chat_id'] as String,
+        content: row['content'] as String,
+        isUser: (row['is_user'] as int) == 1,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+      );
+    }).toList();
   }
 
+  /// Create a new message
+  Future<void> createMessage(Message message) async {
+    final deviceId = await DeviceIdService.instance.getDeviceId();
+
+    await CrdtDatabase.instance.execute('''
+      INSERT OR REPLACE INTO messages (
+        id, chat_id, content, is_user, created_at, deleted_at, device_id, sync_version
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)
+    ''', [
+      message.id,
+      message.chatId,
+      message.content,
+      message.isUser ? 1 : 0,
+      message.createdAt.millisecondsSinceEpoch,
+      deviceId,
+    ]);
+
+    await AppBus.instance.emit(AppEvent.create(
+      type: 'message.created',
+      appId: 'chat',
+      metadata: {
+        'chatId': message.chatId,
+        'messageId': message.id,
+      },
+    ));
+  }
+
+  /// Delete all messages in a chat (used when deleting a chat)
   Future<void> deleteMessages(String chatId) async {
-    await _database!.delete(
-      'messages',
-      where: 'chatId = ?',
-      whereArgs: [chatId],
-    );
+    final deviceId = await DeviceIdService.instance.getDeviceId();
+    final now = DateTime.now();
+
+    await CrdtDatabase.instance.execute('''
+      UPDATE messages
+      SET deleted_at = ?, device_id = ?, sync_version = sync_version + 1
+      WHERE chat_id = ? AND deleted_at IS NULL
+    ''', [
+      now.millisecondsSinceEpoch,
+      deviceId,
+      chatId,
+    ]);
+  }
+
+  /// Dispose resources
+  Future<void> dispose() async {
+    // CRDT database is shared, don't close it
+  }
+
+  /// Reset for testing
+  static void resetInstance() {
+    _instance = null;
   }
 }

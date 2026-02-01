@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'models/note.dart';
-import 'services/notes_storage_v2.dart';
+import 'services/notes_storage.dart';
 import 'widgets/markdown_field.dart';
 
 class NoteEditorScreen extends StatefulWidget {
@@ -78,7 +78,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         updatedAt: DateTime.now(),
       );
 
-      await NotesStorageV2.instance.saveNote(updatedNote);
+      await NotesStorage.instance.saveNote(updatedNote);
       _hasChanges = false;
     } catch (e) {
       if (mounted) {

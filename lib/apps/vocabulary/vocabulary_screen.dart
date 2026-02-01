@@ -4,7 +4,7 @@ import '../../core/app_registry.dart';
 import '../../widgets/sync_widget.dart';
 import 'models/word.dart';
 import 'word_editor_screen.dart';
-import 'services/vocabulary_storage_v2.dart';
+import 'services/vocabulary_storage.dart';
 import 'widgets/word_list_tile.dart';
 
 class VocabularyScreen extends StatefulWidget {
@@ -28,7 +28,7 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
   Future<void> _loadWords() async {
     setState(() => _isLoading = true);
     try {
-      final words = await VocabularyStorageV2.instance.loadWords();
+      final words = await VocabularyStorage.instance.loadWords();
       setState(() {
         _words = words;
         _isLoading = false;
@@ -74,7 +74,7 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
 
   Future<void> _deleteWord(Word word) async {
     try {
-      await VocabularyStorageV2.instance.deleteWord(word.id);
+      await VocabularyStorage.instance.deleteWord(word.id);
       _loadWords();
     } catch (e) {
       if (mounted) {

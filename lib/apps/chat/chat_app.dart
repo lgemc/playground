@@ -7,10 +7,6 @@ import 'screens/chat_list_screen.dart';
 import 'services/chat_storage.dart';
 
 class ChatApp extends SubApp {
-  ChatStorage? _storage;
-
-  ChatStorage get storage => _storage!;
-
   @override
   String get id => 'chat';
 
@@ -25,20 +21,17 @@ class ChatApp extends SubApp {
 
   @override
   Future<void> onInit() async {
-    if (_storage == null) {
-      _storage = ChatStorage();
-      await _storage!.init();
-    }
+    // Storage is singleton, no init needed
   }
 
   @override
   Future<void> onDispose() async {
-    await _storage?.dispose();
+    await ChatStorage.instance.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return ChatListScreen(storage: _storage!);
+    return const ChatListScreen();
   }
 
   @override
@@ -59,7 +52,7 @@ class ChatApp extends SubApp {
           createdAt: now,
           updatedAt: now,
         );
-        await _storage!.createChat(chat);
+        await ChatStorage.instance.createChat(chat);
 
         final message = Message(
           id: '${chatId}_0',
@@ -68,7 +61,7 @@ class ChatApp extends SubApp {
           isUser: true,
           createdAt: now,
         );
-        await _storage!.createMessage(message);
+        await ChatStorage.instance.createMessage(message);
       }
     }
   }

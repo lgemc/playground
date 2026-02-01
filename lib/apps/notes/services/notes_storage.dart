@@ -1,91 +1,104 @@
-import 'dart:convert';
-import 'dart:io';
-
-import 'package:path_provider/path_provider.dart';
-
+import '../models/note.dart' as model;
+import '../../../core/database/crdt_database.dart';
+import '../../../core/sync/services/device_id_service.dart';
 import '../../../core/app_bus.dart';
 import '../../../core/app_event.dart';
-import '../models/note.dart';
 
+/// Storage service using CRDT database for sync support
 class NotesStorage {
   static NotesStorage? _instance;
   static NotesStorage get instance => _instance ??= NotesStorage._();
 
   NotesStorage._();
 
-  Directory? _notesDir;
+  /// Load all non-deleted notes
+  Future<List<model.Note>> loadNotes() async {
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, title, content, created_at, updated_at
+      FROM notes
+      WHERE deleted_at IS NULL
+      ORDER BY updated_at DESC
+    ''');
 
-  Future<Directory> get notesDir async {
-    if (_notesDir != null) return _notesDir!;
-
-    final appDir = await getApplicationDocumentsDirectory();
-    _notesDir = Directory('${appDir.path}/data/notes');
-
-    if (!await _notesDir!.exists()) {
-      await _notesDir!.create(recursive: true);
-    }
-
-    return _notesDir!;
+    return results.map((row) {
+      return model.Note(
+        id: row['id'] as String,
+        title: row['title'] as String,
+        content: row['content'] as String,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+      );
+    }).toList();
   }
 
-  File _metadataFile(Directory dir) => File('${dir.path}/metadata.json');
-
-  File _noteFile(Directory dir, String id) => File('${dir.path}/$id.md');
-
-  Future<List<Note>> loadNotes() async {
-    final dir = await notesDir;
-    final metaFile = _metadataFile(dir);
-
-    if (!await metaFile.exists()) {
-      return [];
-    }
-
-    final contents = await metaFile.readAsString();
-    final List<dynamic> jsonList = json.decode(contents);
-
-    return jsonList
-        .map((e) => Note.fromJson(e as Map<String, dynamic>))
-        .toList()
-      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  /// Watch notes with real-time updates
+  Stream<List<model.Note>> watchNotes() {
+    return CrdtDatabase.instance.watch('''
+      SELECT id, title, content, created_at, updated_at
+      FROM notes
+      WHERE deleted_at IS NULL
+      ORDER BY updated_at DESC
+    ''').map((results) {
+      return results.map((row) {
+        return model.Note(
+          id: row['id'] as String,
+          title: row['title'] as String,
+          content: row['content'] as String,
+          createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+          updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+        );
+      }).toList();
+    });
   }
 
-  Future<String> loadNoteContent(String id) async {
-    final dir = await notesDir;
-    final file = _noteFile(dir, id);
+  /// Load a specific note by ID
+  Future<model.Note> loadFullNote(String id) async {
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, title, content, created_at, updated_at
+      FROM notes
+      WHERE id = ? AND deleted_at IS NULL
+    ''', [id]);
 
-    if (!await file.exists()) {
-      return '';
+    if (results.isEmpty) {
+      throw Exception('Note not found: $id');
     }
 
-    return file.readAsString();
+    final row = results.first;
+    return model.Note(
+      id: row['id'] as String,
+      title: row['title'] as String,
+      content: row['content'] as String,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+    );
   }
 
-  Future<Note> loadFullNote(String id) async {
-    final notes = await loadNotes();
-    final note = notes.firstWhere((n) => n.id == id);
-    final content = await loadNoteContent(id);
-    return note.copyWith(content: content);
-  }
+  /// Save (create or update) a note
+  Future<void> saveNote(model.Note note) async {
+    final deviceId = await DeviceIdService.instance.getDeviceId();
 
-  Future<void> saveNote(Note note) async {
-    final dir = await notesDir;
+    // Check if note exists
+    final existing = await CrdtDatabase.instance.query('''
+      SELECT id, sync_version FROM notes WHERE id = ?
+    ''', [note.id]);
 
-    // Save content to .md file
-    final contentFile = _noteFile(dir, note.id);
-    await contentFile.writeAsString(note.content);
+    final isNew = existing.isEmpty;
+    final syncVersion = isNew ? 1 : (existing.first['sync_version'] as int) + 1;
 
-    // Update metadata
-    final notes = await loadNotes();
-    final existingIndex = notes.indexWhere((n) => n.id == note.id);
-    final isNew = existingIndex < 0;
-
-    if (existingIndex >= 0) {
-      notes[existingIndex] = note;
-    } else {
-      notes.add(note);
-    }
-
-    await _saveMetadata(notes);
+    // Upsert into CRDT database
+    await CrdtDatabase.instance.execute('''
+      INSERT OR REPLACE INTO notes (
+        id, title, content, created_at, updated_at, deleted_at, device_id, sync_version
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+    ''', [
+      note.id,
+      note.title,
+      note.content,
+      note.createdAt.millisecondsSinceEpoch,
+      note.updatedAt.millisecondsSinceEpoch,
+      deviceId,
+      syncVersion,
+    ]);
 
     // Emit event to app bus
     await AppBus.instance.emit(AppEvent.create(
@@ -98,19 +111,32 @@ class NotesStorage {
     ));
   }
 
+  /// Delete a note (soft delete)
   Future<void> deleteNote(String id) async {
-    final dir = await notesDir;
+    final deviceId = await DeviceIdService.instance.getDeviceId();
+    final now = DateTime.now();
 
-    // Delete .md file
-    final contentFile = _noteFile(dir, id);
-    if (await contentFile.exists()) {
-      await contentFile.delete();
-    }
+    // Get current sync version
+    final existing = await CrdtDatabase.instance.query('''
+      SELECT sync_version FROM notes WHERE id = ?
+    ''', [id]);
 
-    // Update metadata
-    final notes = await loadNotes();
-    notes.removeWhere((n) => n.id == id);
-    await _saveMetadata(notes);
+    if (existing.isEmpty) return;
+
+    final syncVersion = (existing.first['sync_version'] as int) + 1;
+
+    // Soft delete
+    await CrdtDatabase.instance.execute('''
+      UPDATE notes
+      SET deleted_at = ?, updated_at = ?, device_id = ?, sync_version = ?
+      WHERE id = ?
+    ''', [
+      now.millisecondsSinceEpoch,
+      now.millisecondsSinceEpoch,
+      deviceId,
+      syncVersion,
+      id,
+    ]);
 
     // Emit event to app bus
     await AppBus.instance.emit(AppEvent.create(
@@ -120,11 +146,13 @@ class NotesStorage {
     ));
   }
 
-  Future<void> _saveMetadata(List<Note> notes) async {
-    final dir = await notesDir;
-    final metaFile = _metadataFile(dir);
+  /// Dispose resources
+  Future<void> dispose() async {
+    // CRDT database is shared, don't close it
+  }
 
-    final jsonList = notes.map((n) => n.toJson()).toList();
-    await metaFile.writeAsString(json.encode(jsonList));
+  /// Reset for testing
+  static void resetInstance() {
+    _instance = null;
   }
 }

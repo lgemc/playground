@@ -3,9 +3,11 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:mime/mime.dart';
+import 'package:crypto/crypto.dart';
 import '../models/file_item.dart';
 import '../models/folder_item.dart';
 import '../models/derivative_artifact.dart';
+import '../../../core/sync/services/device_id_service.dart';
 
 class FileSystemStorage {
   static final instance = FileSystemStorage._();
@@ -14,6 +16,7 @@ class FileSystemStorage {
   Database? _db;
   Directory? _storageDir;
   Directory? _derivativesDir;
+  String? _cachedDeviceId;
 
   Database get db {
     if (_db == null) {
@@ -27,6 +30,18 @@ class FileSystemStorage {
       throw StateError('FileSystemStorage not initialized. Call init() first.');
     }
     return _storageDir!;
+  }
+
+  Future<String> _getDeviceId() async {
+    _cachedDeviceId ??= await DeviceIdService.instance.getDeviceId();
+    return _cachedDeviceId!;
+  }
+
+  /// Compute SHA-256 hash of a file's content
+  Future<String> _computeFileHash(File file) async {
+    final bytes = await file.readAsBytes();
+    final digest = sha256.convert(bytes);
+    return digest.toString();
   }
 
   Future<void> init() async {
@@ -43,7 +58,7 @@ class FileSystemStorage {
     final dbPath = p.join(dataDir.path, 'file_system.db');
     _db = await openDatabase(
       dbPath,
-      version: 2,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE files (
@@ -55,7 +70,11 @@ class FileSystemStorage {
             size INTEGER,
             is_favorite INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT,
+            device_id TEXT DEFAULT '',
+            sync_version INTEGER DEFAULT 1,
+            content_hash TEXT
           )
         ''');
 
@@ -67,6 +86,12 @@ class FileSystemStorage {
         );
         await db.execute(
           'CREATE INDEX idx_files_name ON files(name COLLATE NOCASE)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_files_updated_at ON files(updated_at)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_files_device_id ON files(device_id)',
         );
 
         await db.execute('''
@@ -129,6 +154,26 @@ class FileSystemStorage {
 
           // Run migration from summaries app
           await _migrateSummariesToDerivatives(appDir, db);
+        }
+
+        if (oldVersion < 3) {
+          // Add sync fields to files table
+          await db.execute('ALTER TABLE files ADD COLUMN deleted_at TEXT');
+          await db.execute('ALTER TABLE files ADD COLUMN device_id TEXT DEFAULT \'\'');
+          await db.execute('ALTER TABLE files ADD COLUMN sync_version INTEGER DEFAULT 1');
+
+          // Add indices for sync fields
+          await db.execute(
+            'CREATE INDEX idx_files_updated_at ON files(updated_at)',
+          );
+          await db.execute(
+            'CREATE INDEX idx_files_device_id ON files(device_id)',
+          );
+        }
+
+        if (oldVersion < 4) {
+          // Add content hash field for file change detection
+          await db.execute('ALTER TABLE files ADD COLUMN content_hash TEXT');
         }
       },
     );
@@ -246,7 +291,8 @@ class FileSystemStorage {
     await sourceFile.copy(targetPath);
 
     // Get file info
-    final fileStats = await File(targetPath).stat();
+    final targetFile = File(targetPath);
+    final fileStats = await targetFile.stat();
     final mimeType = lookupMimeType(targetPath);
 
     // Create file item
@@ -255,6 +301,8 @@ class FileSystemStorage {
     final relativePath = targetFolderPath.isEmpty
         ? fileName
         : '$targetFolderPath$fileName';
+    final deviceId = await _getDeviceId();
+    final contentHash = await _computeFileHash(targetFile);
 
     final fileItem = FileItem(
       id: id,
@@ -266,6 +314,9 @@ class FileSystemStorage {
       isFavorite: false,
       createdAt: now,
       updatedAt: now,
+      deviceId: deviceId,
+      syncVersion: 1,
+      contentHash: contentHash,
     );
 
     // Insert into database
@@ -279,14 +330,27 @@ class FileSystemStorage {
     if (files.isEmpty) return;
 
     final fileItem = FileItem.fromMap(files.first);
+    final deviceId = await _getDeviceId();
+
+    // Soft delete: mark as deleted instead of removing
+    await db.update(
+      'files',
+      {
+        'deleted_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+        'device_id': deviceId,
+        'sync_version': fileItem.syncVersion + 1,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    // Still delete the actual file from disk
     final filePath = p.join(storageDir.path, fileItem.relativePath);
     final file = File(filePath);
-
     if (file.existsSync()) {
       await file.delete();
     }
-
-    await db.delete('files', where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> renameFile(String id, String newName) async {
@@ -428,7 +492,7 @@ class FileSystemStorage {
   Future<List<FileItem>> getFilesInFolder(String folderPath) async {
     final results = await db.query(
       'files',
-      where: 'folder_path = ?',
+      where: 'folder_path = ? AND deleted_at IS NULL',
       whereArgs: [folderPath],
       orderBy: 'name COLLATE NOCASE',
     );
@@ -459,7 +523,7 @@ class FileSystemStorage {
   Future<List<FileItem>> getFavorites() async {
     final results = await db.query(
       'files',
-      where: 'is_favorite = ?',
+      where: 'is_favorite = ? AND deleted_at IS NULL',
       whereArgs: [1],
       orderBy: 'name COLLATE NOCASE',
     );
@@ -470,7 +534,7 @@ class FileSystemStorage {
   Future<List<FileItem>> search(String query) async {
     final results = await db.query(
       'files',
-      where: 'name LIKE ?',
+      where: 'name LIKE ? AND deleted_at IS NULL',
       whereArgs: ['%$query%'],
       orderBy: 'name COLLATE NOCASE',
       limit: 50,
@@ -628,5 +692,149 @@ class FileSystemStorage {
   Future<void> close() async {
     await _db?.close();
     _db = null;
+  }
+
+  // === Sync Operations ===
+
+  /// Check if a file's content has changed by comparing its current hash
+  Future<bool> hasFileContentChanged(String fileId) async {
+    final files = await db.query('files', where: 'id = ?', whereArgs: [fileId]);
+    if (files.isEmpty) return false;
+
+    final fileItem = FileItem.fromMap(files.first);
+    if (fileItem.contentHash == null) return true; // No hash, assume changed
+
+    final filePath = p.join(storageDir.path, fileItem.relativePath);
+    final file = File(filePath);
+    if (!file.existsSync()) return true; // File missing, needs sync
+
+    final currentHash = await _computeFileHash(file);
+    return currentHash != fileItem.contentHash;
+  }
+
+  /// Update the content hash for a file (call after file content changes)
+  Future<void> updateFileHash(String fileId) async {
+    final files = await db.query('files', where: 'id = ?', whereArgs: [fileId]);
+    if (files.isEmpty) return;
+
+    final fileItem = FileItem.fromMap(files.first);
+    final filePath = p.join(storageDir.path, fileItem.relativePath);
+    final file = File(filePath);
+    if (!file.existsSync()) return;
+
+    final newHash = await _computeFileHash(file);
+    final deviceId = await _getDeviceId();
+
+    await db.update(
+      'files',
+      {
+        'content_hash': newHash,
+        'updated_at': DateTime.now().toIso8601String(),
+        'device_id': deviceId,
+        'sync_version': fileItem.syncVersion + 1,
+      },
+      where: 'id = ?',
+      whereArgs: [fileId],
+    );
+  }
+
+  /// Get file metadata changes since a given timestamp for sync
+  Future<List<Map<String, dynamic>>> getChangesForSync(DateTime? since) async {
+    String whereClause;
+    List<dynamic> whereArgs;
+
+    if (since != null) {
+      whereClause = 'updated_at > ?';
+      whereArgs = [since.toIso8601String()];
+    } else {
+      // First sync - get all non-deleted files
+      whereClause = 'deleted_at IS NULL';
+      whereArgs = [];
+    }
+
+    final results = await db.query(
+      'files',
+      where: whereClause,
+      whereArgs: whereArgs,
+      orderBy: 'updated_at ASC',
+    );
+
+    return results;
+  }
+
+  /// Apply file metadata changes from remote device
+  Future<void> applyChangesFromSync(List<Map<String, dynamic>> entities) async {
+    for (final entity in entities) {
+      await _upsertFileMetadata(entity);
+    }
+  }
+
+  /// Insert or update file metadata (for sync, without actual file content)
+  Future<void> _upsertFileMetadata(Map<String, dynamic> metadata) async {
+    final id = metadata['id'] as String;
+    final existing = await db.query('files', where: 'id = ?', whereArgs: [id]);
+
+    if (existing.isEmpty) {
+      // New file - insert metadata
+      await db.insert('files', metadata);
+    } else {
+      // Existing file - use content-based conflict resolution
+      final localFile = FileItem.fromMap(existing.first);
+      final remoteVersion = metadata['sync_version'] as int? ?? 1;
+      final remoteHash = metadata['content_hash'] as String?;
+      final remoteUpdatedAt = metadata['updated_at'] as String?;
+
+      // Content-based strategy: Check if actual content differs
+      bool shouldUpdate = false;
+
+      if (remoteHash != null && localFile.contentHash != null) {
+        // Both have hashes - compare them
+        if (remoteHash != localFile.contentHash) {
+          // Content differs - use timestamp to decide
+          if (remoteUpdatedAt != null) {
+            final remoteTime = DateTime.parse(remoteUpdatedAt);
+            shouldUpdate = remoteTime.isAfter(localFile.updatedAt);
+          } else {
+            shouldUpdate = remoteVersion > localFile.syncVersion;
+          }
+        }
+        // If hashes match, no update needed (same content)
+      } else {
+        // Fall back to version-based resolution
+        shouldUpdate = remoteVersion > localFile.syncVersion;
+      }
+
+      if (shouldUpdate) {
+        await db.update(
+          'files',
+          metadata,
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+    }
+  }
+
+  /// Get files that exist in metadata but missing actual file content
+  Future<List<FileItem>> getFilesNeedingContent() async {
+    final results = await db.query(
+      'files',
+      where: 'deleted_at IS NULL',
+      orderBy: 'updated_at DESC',
+    );
+
+    final filesNeedingContent = <FileItem>[];
+    for (final fileMap in results) {
+      final fileItem = FileItem.fromMap(fileMap);
+      final filePath = p.join(storageDir.path, fileItem.relativePath);
+      final file = File(filePath);
+
+      // Check if file is missing on disk
+      if (!file.existsSync()) {
+        filesNeedingContent.add(fileItem);
+      }
+    }
+
+    return filesNeedingContent;
   }
 }

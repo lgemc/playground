@@ -5,12 +5,7 @@ import 'chat_detail_screen.dart';
 import 'package:uuid/uuid.dart';
 
 class ChatListScreen extends StatefulWidget {
-  final ChatStorage storage;
-
-  const ChatListScreen({
-    Key? key,
-    required this.storage,
-  }) : super(key: key);
+  const ChatListScreen({Key? key}) : super(key: key);
 
   @override
   State<ChatListScreen> createState() => _ChatListScreenState();
@@ -36,7 +31,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Future<void> _loadChats() async {
-    final chats = await widget.storage.getAllChats();
+    final chats = await ChatStorage.instance.getAllChats();
     setState(() {
       _chats = chats;
       _filteredChats = chats;
@@ -55,7 +50,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Future<void> _performSearch(String keyword) async {
-    final results = await widget.storage.searchChats(keyword);
+    final results = await ChatStorage.instance.searchChats(keyword);
     setState(() {
       _filteredChats = results;
     });
@@ -71,7 +66,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
       isTitleGenerating: true,
     );
 
-    await widget.storage.createChat(chat);
+    await ChatStorage.instance.createChat(chat);
     await _loadChats();
 
     if (mounted) {
@@ -79,7 +74,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
         context,
         MaterialPageRoute(
           builder: (context) => ChatDetailScreen(
-            storage: widget.storage,
             chat: chat,
             onChatUpdated: _loadChats,
           ),
@@ -89,7 +83,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Future<void> _restartChat(Chat chat) async {
-    await widget.storage.deleteMessages(chat.id);
+    await ChatStorage.instance.deleteMessages(chat.id);
 
     final restartedChat = chat.copyWith(
       title: 'Generating title...',
@@ -97,7 +91,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
       isTitleGenerating: true,
     );
 
-    await widget.storage.updateChat(restartedChat);
+    await ChatStorage.instance.updateChat(restartedChat);
     await _loadChats();
 
     if (mounted) {
@@ -105,7 +99,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
         context,
         MaterialPageRoute(
           builder: (context) => ChatDetailScreen(
-            storage: widget.storage,
             chat: restartedChat,
             onChatUpdated: _loadChats,
           ),
@@ -115,7 +108,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Future<void> _deleteChat(Chat chat) async {
-    await widget.storage.deleteChat(chat.id);
+    await ChatStorage.instance.deleteChat(chat.id);
     await _loadChats();
   }
 
@@ -266,7 +259,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                 context,
                                 MaterialPageRoute(
                                   builder: (context) => ChatDetailScreen(
-                                    storage: widget.storage,
                                     chat: chat,
                                     onChatUpdated: _loadChats,
                                   ),

@@ -80,45 +80,23 @@ $content
 
 Generate a filename based on this content following the rules in the system prompt.''';
 
-    // Generate title with low temperature for consistency
-    final result = await _autocompletion.prompt(
+    // Use content-only streaming to skip chain-of-thought reasoning
+    // This avoids the need to extract titles from quoted reasoning text
+    final buffer = StringBuffer();
+    await for (final chunk in _autocompletion.promptStreamContentOnly(
       prompt,
       systemPrompt: _systemPrompt,
       temperature: 0.3,
       maxTokens: 200,
-    );
-
-    // For reasoning models, the result may contain reasoning text
-    // Extract the actual title if it's quoted
-    final extracted = _extractTitleFromQuotes(result);
+    )) {
+      buffer.write(chunk);
+    }
+    final result = buffer.toString();
 
     // Sanitize the result
-    final sanitized = _sanitizeFilename(extracted.trim());
+    final sanitized = _sanitizeFilename(result.trim());
 
     return sanitized;
-  }
-
-  /// Extract title from quoted text in reasoning output
-  /// Reasoning models often quote the extracted title in their output
-  String _extractTitleFromQuotes(String text) {
-    // Find all quoted strings
-    final quotePattern = RegExp(r'"([^"]+)"');
-    final matches = quotePattern.allMatches(text).toList();
-
-    if (matches.isEmpty) {
-      return text; // No quotes found, use as-is
-    }
-
-    // Find the longest quoted string (likely the actual title)
-    String longest = '';
-    for (var match in matches) {
-      final quoted = match.group(1)!;
-      if (quoted.length > longest.length && quoted.length < 150) {
-        longest = quoted;
-      }
-    }
-
-    return longest.isNotEmpty ? longest : text;
   }
 
   /// Check if the service is configured

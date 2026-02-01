@@ -19,7 +19,7 @@ class _ModuleFormScreenState extends State<ModuleFormScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
-  final _storage = LmsStorageService.instance;
+  final _storage = LmsCrdtStorageService.instance;
 
   bool _isLoading = false;
 

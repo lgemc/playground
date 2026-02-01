@@ -19,7 +19,7 @@ class ViewerSubSectionScreen extends StatefulWidget {
 }
 
 class _ViewerSubSectionScreenState extends State<ViewerSubSectionScreen> {
-  final _storage = LmsStorageService.instance;
+  final _storage = LmsCrdtStorageService.instance;
   LessonSubSection? _subSection;
   bool _isLoading = true;
 

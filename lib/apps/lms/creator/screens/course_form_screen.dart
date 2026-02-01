@@ -15,7 +15,7 @@ class _CourseFormScreenState extends State<CourseFormScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
-  final _storage = LmsStorageService.instance;
+  final _storage = LmsCrdtStorageService.instance;
 
   String? _thumbnailFileId;
   String? _thumbnailFileName;

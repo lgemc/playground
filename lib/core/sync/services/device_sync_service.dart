@@ -44,6 +44,9 @@ class DeviceSyncService {
         _discoveryService = DeviceDiscoveryService(deviceIdService),
         _connectionService = SocketConnectionService();
 
+  /// Get the discovery service
+  DeviceDiscoveryService get discoveryService => _discoveryService;
+
   /// Set the callback for getting changes from apps
   void setGetChangesCallback(GetChangesCallback callback) {
     _getChangesCallback = callback;
@@ -61,12 +64,21 @@ class DeviceSyncService {
     final myDeviceName = await _deviceIdService.getDeviceName();
 
     // Set device info for connection service if it's SocketConnectionService
-    if (_connectionService is SocketConnectionService) {
-      (_connectionService as SocketConnectionService).setDeviceInfo(myDeviceId, myDeviceName);
+    final connectionService = _connectionService;
+    if (connectionService is SocketConnectionService) {
+      connectionService.setDeviceInfo(myDeviceId, myDeviceName);
     }
 
     // Start listening for incoming connections
     await _connectionService.startListening(7654);
+
+    // Set the actual port in discovery service
+    if (connectionService is SocketConnectionService) {
+      final actualPort = connectionService.listeningPort;
+      if (actualPort != null) {
+        _discoveryService.setSyncPort(actualPort);
+      }
+    }
 
     // Start advertising this device
     await _discoveryService.startAdvertising();
@@ -132,6 +144,7 @@ class DeviceSyncService {
     }
 
     try {
+
       // Connect to device
       final session = await connectToDevice(device);
 
@@ -189,6 +202,7 @@ class DeviceSyncService {
 
   /// Handle incoming connection from another device
   Future<void> _handleIncomingConnection(SyncConnection connection) async {
+
     if (_getChangesCallback == null || _applyChangesCallback == null) {
       await connection.close();
       return;
@@ -198,9 +212,10 @@ class DeviceSyncService {
       final protocol = SyncProtocol(connection);
 
       // Wait for handshake with extended timeout
-      await protocol.messages
+      final handshakeMsg = await protocol.messages
           .firstWhere((msg) => msg.type == SyncMessageType.handshake)
           .timeout(const Duration(seconds: 30));
+
 
       // Send acknowledgment
       await protocol.send(SyncMessage(
@@ -208,21 +223,34 @@ class DeviceSyncService {
         payload: {'status': 'ok'},
       ));
 
-      // Listen for sync requests
+      // Listen for sync requests with timeout to prevent hanging
       final coordinator = SyncCoordinator(protocol);
 
-      await for (final message in protocol.messages) {
-        if (message.type == SyncMessageType.syncRequest) {
-          await coordinator.handleSyncRequest(
-            message,
-            (appId, since) => _getChangesCallback!(appId, since),
-            (appId, entities) => _applyChangesCallback!(appId, entities),
-          );
-          break;
-        }
-      }
+      // Handle ONE sync per connection - simpler and more reliable
 
-      await protocol.dispose();
+      try {
+        await for (final message in protocol.messages.timeout(
+          const Duration(seconds: 30),
+          onTimeout: (sink) {
+            sink.close();
+          },
+        )) {
+
+          if (message.type == SyncMessageType.syncRequest) {
+            await coordinator.handleSyncRequest(
+              message,
+              (appId, since) => _getChangesCallback!(appId, since),
+              (appId, entities) => _applyChangesCallback!(appId, entities),
+            );
+            break; // ONE sync per connection
+          }
+        }
+      } catch (e) {
+      } finally {
+        // Always clean up
+        await protocol.dispose();
+        await connection.close();
+      }
     } catch (e) {
       await connection.close();
     }
