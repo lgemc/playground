@@ -193,11 +193,52 @@ class DeviceSyncService {
         await _updateLastSyncTime(appId, device.id);
       }
 
-      // Perform blob sync for file_system when syncing crdt_database
+      // Perform bidirectional blob sync for file_system when syncing crdt_database
       if (appId == 'crdt_database' && result.success) {
-        print('[Sync] Checking if file blobs need syncing...');
+        // Step 1: Wait for responder's blob request (if any)
+        print('[Sync] Step 1: Waiting for responder blob request...');
+        try {
+          bool receivedResponderRequest = false;
+          await for (final message in protocol.messages.timeout(
+            const Duration(seconds: 10),
+            onTimeout: (sink) {
+              print('[Sync] No blob request from responder (timeout after 10s)');
+              sink.close();
+            },
+          )) {
+            print('[Sync] Initiator received message: ${message.type}');
+
+            if (message.type == SyncMessageType.blobRequest) {
+              print('[Sync] Received blob request from responder, handling...');
+              final storage = FileSystemStorage.instance;
+              await coordinator.handleBlobRequest(
+                message,
+                (hash) => storage.getBlobByHash(hash),
+                (hash) => storage.getRelativePathByHash(hash),
+              );
+              print('[Sync] Sent blobs to responder');
+              receivedResponderRequest = true;
+              break;
+            } else if (message.type == SyncMessageType.syncData ||
+                       message.type == SyncMessageType.syncAck) {
+              print('[Sync] Ignoring ${message.type} (stale message)');
+            } else {
+              print('[Sync] Unexpected message: ${message.type}, stopping');
+              break;
+            }
+          }
+
+          if (!receivedResponderRequest) {
+            print('[Sync] Responder did not need any blobs');
+          }
+        } catch (e) {
+          print('[Sync] Error handling responder blob request: $e');
+        }
+
+        // Step 2: Request our own blobs from responder
+        print('[Sync] Step 2: Checking if initiator needs blobs...');
         await _syncFileBlobs(coordinator);
-        print('[Sync] Blob sync check completed');
+        print('[Sync] Bidirectional blob sync completed');
       }
 
       // Clean up
@@ -268,6 +309,7 @@ class DeviceSyncService {
           print('[Sync] Received message: ${message.type}');
           print('[Sync] Is handshake? ${message.type == SyncMessageType.handshake}');
           print('[Sync] handshakeCompleted? $handshakeCompleted');
+          print('[Sync] syncedAppId: $syncedAppId');
 
           if (message.type == SyncMessageType.handshake) {
             if (!handshakeCompleted) {
@@ -297,12 +339,40 @@ class DeviceSyncService {
 
             // Don't break - connection stays open for more syncs or blob requests
             if (syncedAppId == 'crdt_database') {
-              print('[Sync] Metadata sync done, ready for blob requests or next sync...');
+              print('[Sync] Metadata sync done, checking if responder needs blobs...');
+
+              // Perform blob sync using coordinator (this will block until complete or timeout)
+              final storage = FileSystemStorage.instance;
+              final neededHashes = await storage.getMissingBlobHashes();
+              if (neededHashes.isNotEmpty) {
+                print('[Sync] Responder needs ${neededHashes.length} blobs, starting blob sync...');
+                try {
+                  await coordinator.syncBlobs(
+                    () => storage.getMissingBlobHashes(),
+                    (hash) => storage.getBlobByHash(hash),
+                    (hash) => storage.getRelativePathByHash(hash),
+                    (hash, data, relativePath) => storage.storeBlobByHash(hash, data, relativePath),
+                  );
+                  print('[Sync] Responder blob sync completed successfully');
+                } catch (e) {
+                  print('[Sync] Responder blob sync error: $e');
+                }
+              } else {
+                print('[Sync] Responder has all blobs');
+              }
+
+              // After blob sync, continue listening for more requests
+              print('[Sync] Responder ready for more messages...');
             } else {
               print('[Sync] Sync done, ready for next sync request...');
             }
-          } else if (message.type == SyncMessageType.blobRequest && syncedAppId == 'crdt_database') {
-            print('[Sync] Received blob request, processing...');
+          } else if (message.type == SyncMessageType.blobRequest) {
+            print('[Sync] Received blobRequest! syncedAppId=$syncedAppId');
+            if (syncedAppId != 'crdt_database') {
+              print('[Sync] ⚠️ Ignoring blob request for non-crdt_database app');
+              continue;
+            }
+            print('[Sync] Processing blob request...');
             final storage = FileSystemStorage.instance;
             await coordinator.handleBlobRequest(
               message,
@@ -311,6 +381,17 @@ class DeviceSyncService {
             );
             print('[Sync] Blob request handled, ready for next sync...');
             // Don't break - keep connection alive for more syncs
+          } else if (message.type == SyncMessageType.blobData && syncedAppId == 'crdt_database') {
+            // Receiving blob data from initiator - handled in blobComplete
+            continue;
+          } else if (message.type == SyncMessageType.blobComplete && syncedAppId == 'crdt_database') {
+            // All blobs received from initiator
+            print('[Sync] All blobs received from initiator');
+            // The blob data was already streamed via the message loop
+            // This signals completion - we can exit or continue listening
+            continue;
+          } else {
+            print('[Sync] ⚠️ Unhandled message type: ${message.type}');
           }
         }
         print('[Sync] Message loop ended');

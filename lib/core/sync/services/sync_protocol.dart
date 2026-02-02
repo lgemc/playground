@@ -253,12 +253,14 @@ class SyncProtocol {
 
   /// Request blobs by hash
   Future<void> requestBlobs(List<String> hashes) async {
+    print('[Protocol] Sending blobRequest for ${hashes.length} hashes');
     await send(SyncMessage(
       type: SyncMessageType.blobRequest,
       payload: {
         'hashes': hashes,
       },
     ));
+    print('[Protocol] blobRequest sent');
   }
 
   /// Send blob data in chunks
@@ -415,6 +417,8 @@ class SyncCoordinator {
       print('[Sync] Waiting for syncData messages for appId: $appId');
       StreamSubscription? subscription;
 
+      final completer = Completer<void>();
+
       subscription = _protocol.messages.timeout(
         const Duration(seconds: 30), // Increased timeout for debugging
         onTimeout: (sink) {
@@ -422,47 +426,62 @@ class SyncCoordinator {
           receivedAllData = true;
           sink.close();
         },
-      ).listen((message) async {
-        print('[Sync] Received message type: ${message.type}');
+      ).listen(
+        (message) async {
+          print('[Sync] Received message type: ${message.type}');
 
-        if (message.type == SyncMessageType.syncData) {
-          if (message.payload['appId'] == appId) {
-            final entities = (message.payload['entities'] as List)
-                .cast<Map<String, dynamic>>();
-            print('[Sync] Received ${entities.length} entities in batch');
-            remoteEntities.addAll(entities);
+          if (message.type == SyncMessageType.syncData) {
+            if (message.payload['appId'] == appId) {
+              final entities = (message.payload['entities'] as List)
+                  .cast<Map<String, dynamic>>();
+              print('[Sync] Received ${entities.length} entities in batch');
+              remoteEntities.addAll(entities);
 
-            // Acknowledge
-            await _protocol.acknowledgeSync(message.payload['batchIndex'] as int);
+              // Acknowledge
+              await _protocol.acknowledgeSync(message.payload['batchIndex'] as int);
 
-            // Check if this was the last batch
-            final batchIndex = message.payload['batchIndex'] as int;
-            final totalBatches = message.payload['totalBatches'] as int;
-            print('[Sync] Batch $batchIndex of $totalBatches');
-            if (batchIndex == totalBatches - 1) {
-              print('[Sync] ✅ Received all batches: ${remoteEntities.length} total entities');
-              receivedAllData = true;
-              // Cancel subscription immediately
-              await subscription?.cancel();
+              // Check if this was the last batch
+              final batchIndex = message.payload['batchIndex'] as int;
+              final totalBatches = message.payload['totalBatches'] as int;
+              print('[Sync] Batch $batchIndex of $totalBatches');
+              if (batchIndex == totalBatches - 1) {
+                print('[Sync] ✅ Received all batches: ${remoteEntities.length} total entities');
+                receivedAllData = true;
+                // Don't cancel here - complete the completer instead
+                completer.complete();
+              }
             }
+          } else if (message.type == SyncMessageType.syncAck) {
+            print('[Sync] Received syncAck');
+          } else if (message.type == SyncMessageType.handshake || message.type == SyncMessageType.handshakeAck) {
+            print('[Sync] Ignoring ${message.type} (handled by outer loop)');
+            // Ignore handshake messages - they're handled by the outer connection loop
+          } else {
+            print('[Sync] Unexpected message: ${message.type}, stopping');
+            receivedAllData = true;
+            completer.complete();
           }
-        } else if (message.type == SyncMessageType.syncAck) {
-          print('[Sync] Received syncAck');
-        } else if (message.type == SyncMessageType.handshake || message.type == SyncMessageType.handshakeAck) {
-          print('[Sync] Ignoring ${message.type} (handled by outer loop)');
-          // Ignore handshake messages - they're handled by the outer connection loop
-        } else {
-          print('[Sync] Unexpected message: ${message.type}, stopping');
-          receivedAllData = true;
-          await subscription?.cancel();
-        }
-      });
+        },
+        onDone: () {
+          print('[Sync] Subscription completed (onDone)');
+          if (!completer.isCompleted) completer.complete();
+        },
+        onError: (error) {
+          print('[Sync] Subscription error: $error');
+          if (!completer.isCompleted) completer.complete();
+        },
+      );
 
-      // Wait for subscription to complete (either data received or timeout)
-      await subscription.asFuture().catchError((_) => null);
-      if (!receivedAllData) {
-        await subscription.cancel();
-      }
+      // Wait for either completion or timeout
+      await completer.future.timeout(
+        const Duration(seconds: 35),
+        onTimeout: () {
+          print('[Sync] Completer timeout!');
+        },
+      );
+
+      print('[Sync] Cancelling subscription...');
+      await subscription.cancel();
       print('[Sync] handleSyncRequest subscription canceled');
 
       // Apply remote changes
@@ -494,10 +513,16 @@ class SyncCoordinator {
       // Listen for incoming blobs
       final blobBuffers = <String, List<List<int>>>{};
       final blobMetadata = <String, Map<String, dynamic>>{};
+      final receivedHashes = <String>{};
+
+      final failedHashes = <String>{};
 
       await for (final message in _protocol.messages.timeout(
         const Duration(seconds: 60),
-        onTimeout: (sink) => sink.close(),
+        onTimeout: (sink) {
+          print('[BlobSync] ⚠️ Timeout! Received ${receivedHashes.length}/${neededHashes.length} blobs, ${failedHashes.length} failed');
+          sink.close();
+        },
       )) {
         if (message.type == SyncMessageType.blobData) {
           final hash = message.payload['hash'] as String;
@@ -528,16 +553,44 @@ class SyncCoordinator {
           await storeBlob(hash, completeBlob, relativePath);
           print('[BlobSync] Received blob: $hash ($relativePath)');
 
+          // Track received blobs
+          receivedHashes.add(hash);
+
           // Clean up
           blobBuffers.remove(hash);
           blobMetadata.remove(hash);
 
           // Check if all blobs received
-          if (blobBuffers.isEmpty) {
+          print('[BlobSync] Progress: ${receivedHashes.length}/${neededHashes.length} blobs received');
+          if (receivedHashes.length >= neededHashes.length) {
+            print('[BlobSync] ✅ All blobs received!');
             break;
+          }
+        } else if (message.type == SyncMessageType.error) {
+          final errorType = message.payload['type'] as String?;
+          if (errorType == 'blob_not_found') {
+            final hash = message.payload['hash'] as String;
+            print('[BlobSync] ⚠️ Blob not available on remote: $hash');
+            failedHashes.add(hash);
+
+            // Count this as "received" (even though it failed) so we don't wait forever
+            receivedHashes.add(hash);
+
+            // Check if we're done
+            print('[BlobSync] Progress: ${receivedHashes.length}/${neededHashes.length} (${failedHashes.length} unavailable)');
+            if (receivedHashes.length >= neededHashes.length) {
+              print('[BlobSync] ✅ Sync complete (some blobs unavailable)');
+              break;
+            }
           }
         }
       }
+
+      if (failedHashes.isNotEmpty) {
+        print('[BlobSync] ⚠️ ${failedHashes.length} blobs were not available on remote device');
+      }
+
+      print('[BlobSync] Blob sync completed. Received ${receivedHashes.length} blobs');
     } catch (e) {
       print('[BlobSync] Error: $e');
     }
@@ -552,16 +605,37 @@ class SyncCoordinator {
     try {
       final hashes = (request.payload['hashes'] as List).cast<String>();
 
-      print('[BlobSync] Sending ${hashes.length} blobs');
+      print('[BlobSync] Received request for ${hashes.length} blobs');
+      print('[BlobSync] Hashes: $hashes');
+
+      int sentCount = 0;
+      int notFoundCount = 0;
 
       for (final hash in hashes) {
+        print('[BlobSync] Looking up blob: $hash');
         final blob = await getBlobByHash(hash);
         final relativePath = await getRelativePathByHash(hash);
 
         if (blob != null && relativePath != null) {
+          print('[BlobSync] Sending blob: $hash ($relativePath, ${blob.length} bytes)');
           await _protocol.sendBlob(hash, relativePath, blob);
+          print('[BlobSync] Blob sent: $hash');
+          sentCount++;
+        } else {
+          print('[BlobSync] ⚠️ Blob not found: $hash (blob=${blob != null}, path=${relativePath != null})');
+          // Send an error marker so the requester knows this blob is not available
+          await _protocol.send(SyncMessage(
+            type: SyncMessageType.error,
+            payload: {
+              'error': 'Blob not found: $hash',
+              'hash': hash,
+              'type': 'blob_not_found',
+            },
+          ));
+          notFoundCount++;
         }
       }
+      print('[BlobSync] Sent $sentCount blobs, $notFoundCount not found');
     } catch (e) {
       print('[BlobSync] Error sending blobs: $e');
     }

@@ -809,6 +809,8 @@ class FileSystemStorage {
       [],
     );
 
+    print('[FileSystem] getFilesNeedingContent: checking ${results.length} files in metadata');
+
     final filesNeedingContent = <FileItem>[];
     for (final fileMap in results) {
       final fileItem = FileItem.fromMap(fileMap);
@@ -817,10 +819,12 @@ class FileSystemStorage {
 
       // Check if file is missing on disk
       if (!file.existsSync()) {
+        print('[FileSystem]   Missing: ${fileItem.name} (hash: ${fileItem.contentHash})');
         filesNeedingContent.add(fileItem);
       }
     }
 
+    print('[FileSystem] Total files needing content: ${filesNeedingContent.length}');
     return filesNeedingContent;
   }
 
@@ -847,43 +851,93 @@ class FileSystemStorage {
   /// Get blob bytes by content hash
   Future<List<int>?> getBlobByHash(String hash) async {
     final file = await getFileByHash(hash);
-    if (file == null) return null;
+    if (file == null) {
+      print('[FileSystem] getBlobByHash($hash): No file metadata found');
+      return null;
+    }
 
-    final ioFile = File(p.join(storageDir.path, file.relativePath));
-    if (!ioFile.existsSync()) return null;
+    final absolutePath = p.join(storageDir.path, file.relativePath);
+    final ioFile = File(absolutePath);
+    if (!ioFile.existsSync()) {
+      print('[FileSystem] getBlobByHash($hash): File exists in DB but missing on disk');
+      print('[FileSystem]   Expected path: $absolutePath');
+      print('[FileSystem]   Storage dir: ${storageDir.path}');
+      print('[FileSystem]   Relative path: ${file.relativePath}');
 
+      // Check if the parent directory exists
+      final parentDir = ioFile.parent;
+      print('[FileSystem]   Parent dir exists: ${parentDir.existsSync()}');
+      if (parentDir.existsSync()) {
+        final filesInParent = parentDir.listSync();
+        print('[FileSystem]   Files in parent: ${filesInParent.map((f) => p.basename(f.path)).toList()}');
+      }
+
+      return null;
+    }
+
+    print('[FileSystem] getBlobByHash($hash): Found at ${file.relativePath}');
     return ioFile.readAsBytes();
   }
 
   /// Store blob from remote device
   Future<void> storeBlobByHash(String hash, List<int> data, String relativePath) async {
-    final filePath = p.join(storageDir.path, relativePath);
-    final file = File(filePath);
+    // Find ALL files with this hash (there might be duplicates)
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM files
+      WHERE content_hash = ? AND deleted_at IS NULL
+      ''',
+      [hash],
+    );
 
-    print('[FileSystem] Storing blob to: $filePath (${data.length} bytes)');
+    print('[FileSystem] Storing blob for hash $hash to ${results.length} file(s)');
 
-    // Create parent directories
-    await file.parent.create(recursive: true);
+    if (results.isEmpty) {
+      print('[FileSystem] ⚠️ No files found with hash $hash, skipping');
+      return;
+    }
 
-    // Write blob
-    await file.writeAsBytes(data);
+    // Verify the blob hash first (before writing to disk)
+    final tempFile = File(p.join(storageDir.path, '.temp_$hash'));
+    await tempFile.writeAsBytes(data);
+    final actualHash = await _computeFileHash(tempFile);
 
-    // Verify hash
-    final actualHash = await _computeFileHash(file);
     if (actualHash != hash) {
-      await file.delete();
+      await tempFile.delete();
       throw Exception('Hash mismatch: expected $hash, got $actualHash');
     }
 
-    print('[FileSystem] Blob stored and verified: $relativePath');
+    // Store blob to ALL files with this hash
+    for (final fileMap in results) {
+      final fileItem = FileItem.fromMap(fileMap);
+      final filePath = p.join(storageDir.path, fileItem.relativePath);
+      final file = File(filePath);
+
+      print('[FileSystem]   → Storing to: ${fileItem.relativePath} (${data.length} bytes)');
+
+      // Create parent directories
+      await file.parent.create(recursive: true);
+
+      // Copy the verified blob
+      await tempFile.copy(filePath);
+    }
+
+    // Clean up temp file
+    await tempFile.delete();
+
+    print('[FileSystem] ✅ Blob stored and verified to ${results.length} location(s)');
   }
 
   /// Get list of hashes we need based on metadata
   Future<List<String>> getMissingBlobHashes() async {
     final files = await getFilesNeedingContent();
-    return files
+    final hashes = files
         .where((f) => f.contentHash != null)
         .map((f) => f.contentHash!)
+        .toSet() // Deduplicate - multiple files may share the same content hash
         .toList();
+
+    print('[FileSystem] getMissingBlobHashes: ${files.length} files need content, ${hashes.length} unique hashes');
+    return hashes;
   }
 }
