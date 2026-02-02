@@ -381,15 +381,6 @@ class DeviceSyncService {
             );
             print('[Sync] Blob request handled, ready for next sync...');
             // Don't break - keep connection alive for more syncs
-          } else if (message.type == SyncMessageType.blobData && syncedAppId == 'crdt_database') {
-            // Receiving blob data from initiator - handled in blobComplete
-            continue;
-          } else if (message.type == SyncMessageType.blobComplete && syncedAppId == 'crdt_database') {
-            // All blobs received from initiator
-            print('[Sync] All blobs received from initiator');
-            // The blob data was already streamed via the message loop
-            // This signals completion - we can exit or continue listening
-            continue;
           } else {
             print('[Sync] ⚠️ Unhandled message type: ${message.type}');
           }
