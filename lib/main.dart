@@ -33,6 +33,8 @@ import 'apps/lms/viewer/lms_viewer_app.dart';
 import 'core/sync/services/device_sync_service.dart';
 import 'core/sync/services/device_id_service.dart';
 import 'core/sync/database/sync_database.dart';
+import 'widgets/playground_container.dart';
+import 'widgets/app_switcher_fab.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -872,7 +874,14 @@ class PlaygroundApp extends StatelessWidget {
         useMaterial3: true,
       ),
       navigatorKey: AppRegistry.instance.navigatorKey,
-      home: const LauncherScreen(),
+      home: Stack(
+        children: [
+          PlaygroundContainer(
+            launcher: const LauncherScreen(),
+          ),
+          const AppSwitcherFAB(),
+        ],
+      ),
     );
   }
 }

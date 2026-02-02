@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../core/app_registry.dart';
-import '../../core/sub_app.dart';
 import 'widgets/app_icon.dart';
 import 'widgets/global_sync_dialog.dart';
 
@@ -10,13 +9,13 @@ class LauncherScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final apps = AppRegistry.instance.apps;
+    final appDefinitions = AppRegistry.instance.appDefinitions;
 
     return Scaffold(
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
-          child: apps.isEmpty ? _buildEmptyState(context) : _buildAppGrid(context, apps),
+          child: appDefinitions.isEmpty ? _buildEmptyState(context) : _buildAppGrid(context, appDefinitions),
         ),
       ),
       floatingActionButton: FloatingActionButton(
@@ -56,7 +55,7 @@ class LauncherScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildAppGrid(BuildContext context, List<SubApp> apps) {
+  Widget _buildAppGrid(BuildContext context, List<AppDefinition> appDefinitions) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final crossAxisCount = _getCrossAxisCount(constraints.maxWidth);
@@ -68,12 +67,12 @@ class LauncherScreen extends StatelessWidget {
             crossAxisSpacing: 24,
             childAspectRatio: 0.85,
           ),
-          itemCount: apps.length,
+          itemCount: appDefinitions.length,
           itemBuilder: (context, index) {
-            final app = apps[index];
+            final appDef = appDefinitions[index];
             return AppIcon(
-              app: app,
-              onTap: () => AppRegistry.instance.openApp(context, app),
+              appDefinition: appDef,
+              onTap: () => AppRegistry.instance.launchApp(appDef.id),
             );
           },
         );

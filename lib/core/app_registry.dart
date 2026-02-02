@@ -1,7 +1,28 @@
 import 'package:flutter/material.dart';
 import '../services/config_service.dart';
 import '../services/share_service.dart';
+import '../services/share_content.dart';
 import 'sub_app.dart';
+import 'app_runtime_manager.dart';
+
+/// Represents a registered app definition (factory for creating instances)
+class AppDefinition {
+  final String id;
+  final String name;
+  final IconData icon;
+  final Color themeColor;
+  final List<ShareContentType> acceptedShareTypes;
+  final SubApp Function() factory;
+
+  AppDefinition({
+    required this.id,
+    required this.name,
+    required this.icon,
+    required this.themeColor,
+    required this.acceptedShareTypes,
+    required this.factory,
+  });
+}
 
 /// Central registry that discovers, registers, and manages all sub-apps.
 /// Provides navigation between apps and metadata for the launcher.
@@ -11,15 +32,28 @@ class AppRegistry {
   static final AppRegistry _instance = AppRegistry._();
   static AppRegistry get instance => _instance;
 
-  final Map<String, SubApp> _apps = {};
+  final Map<String, AppDefinition> _appDefinitions = {};
   final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-  /// Get all registered apps
-  List<SubApp> get apps => _apps.values.toList();
+  /// Get all registered app definitions
+  List<AppDefinition> get appDefinitions => _appDefinitions.values.toList();
 
-  /// Register a sub-app
+  /// Get all registered apps (for backward compatibility - returns factories)
+  List<SubApp> get apps => _appDefinitions.values.map((def) => def.factory()).toList();
+
+  /// Register a sub-app (accepts instance for backward compatibility)
   void register(SubApp app) async {
-    _apps[app.id] = app;
+    // Create a factory that returns the app instance
+    // Note: For proper multi-app support, pass factories to registerFactory instead
+    _appDefinitions[app.id] = AppDefinition(
+      id: app.id,
+      name: app.name,
+      icon: app.icon,
+      themeColor: app.themeColor,
+      acceptedShareTypes: app.acceptedShareTypes,
+      factory: () => app,
+    );
+
     await ConfigService.instance.loadAppOverrides(app.id);
     app.onInit();
 
@@ -29,10 +63,44 @@ class AppRegistry {
     }
   }
 
-  /// Get a specific app by ID
-  SubApp? getApp(String id) => _apps[id];
+  /// Register a sub-app factory (preferred method for multi-app support)
+  void registerFactory(
+    String id,
+    String name,
+    IconData icon,
+    Color themeColor,
+    SubApp Function() factory, {
+    List<ShareContentType> acceptedShareTypes = const [],
+  }) async {
+    _appDefinitions[id] = AppDefinition(
+      id: id,
+      name: name,
+      icon: icon,
+      themeColor: themeColor,
+      acceptedShareTypes: acceptedShareTypes,
+      factory: factory,
+    );
 
-  /// Navigate to a specific sub-app
+    await ConfigService.instance.loadAppOverrides(id);
+
+    // Initialize one instance to set up config defaults
+    final instance = factory();
+    instance.onInit();
+    instance.onDispose();
+
+    // Register share receivers if app accepts any content types
+    if (acceptedShareTypes.isNotEmpty) {
+      ShareService.instance.registerReceiver(id, acceptedShareTypes);
+    }
+  }
+
+  /// Get a specific app definition by ID
+  AppDefinition? getAppDefinition(String id) => _appDefinitions[id];
+
+  /// Get a specific app instance by ID (for backward compatibility)
+  SubApp? getApp(String id) => _appDefinitions[id]?.factory();
+
+  /// Navigate to a specific sub-app (legacy method - uses Navigator)
   void openApp(BuildContext context, SubApp app) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -41,9 +109,19 @@ class AppRegistry {
     );
   }
 
-  /// Return to the launcher (pop current app)
+  /// Launch app using runtime manager (preferred method)
+  Future<void> launchApp(String appId) async {
+    final definition = _appDefinitions[appId];
+    if (definition == null) {
+      throw StateError('App $appId is not registered');
+    }
+
+    await AppRuntimeManager.instance.launchApp(appId, definition.factory);
+  }
+
+  /// Return to the launcher (keep app running in background)
   void returnToLauncher(BuildContext context) {
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    AppRuntimeManager.instance.returnToLauncher();
   }
 }
 

@@ -23,6 +23,12 @@ abstract class SubApp {
   /// Called when the app is first initialized
   void onInit() {}
 
+  /// Called when the app is paused (goes to background)
+  void onPause() {}
+
+  /// Called when the app is resumed (comes to foreground)
+  void onResume() {}
+
   /// Called when the app is disposed
   void onDispose() {}
 
