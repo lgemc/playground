@@ -61,6 +61,16 @@ class FileSystemStorage {
     ''');
 
     await CrdtDatabase.instance.execute('''
+      CREATE TABLE IF NOT EXISTS folders (
+        path TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        parent_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        deleted_at INTEGER
+      )
+    ''');
+
+    await CrdtDatabase.instance.execute('''
       CREATE TABLE IF NOT EXISTS derivatives (
         id TEXT PRIMARY KEY NOT NULL,
         file_id TEXT NOT NULL,
@@ -94,11 +104,53 @@ class FileSystemStorage {
   }
 
 
+  // === Helper Methods ===
+
+  /// Ensure all folders in a path exist in the database
+  Future<void> _ensureFolderPathExists(String folderPath) async {
+    if (folderPath.isEmpty) return;
+
+    final parts = folderPath.split('/').where((p) => p.isNotEmpty).toList();
+    String currentPath = '';
+
+    for (final part in parts) {
+      final parentPath = currentPath;
+      currentPath = currentPath.isEmpty ? '$part/' : '$currentPath$part/';
+
+      // Check if folder exists in database
+      final existing = await CrdtDatabase.instance.query(
+        'SELECT * FROM folders WHERE path = ?',
+        [currentPath],
+      );
+
+      if (existing.isEmpty) {
+        // Create folder entry
+        await CrdtDatabase.instance.execute(
+          '''
+          INSERT OR IGNORE INTO folders (path, name, parent_path, created_at)
+          VALUES (?, ?, ?, ?)
+          ''',
+          [
+            currentPath,
+            part,
+            parentPath,
+            DateTime.now().millisecondsSinceEpoch,
+          ],
+        );
+      }
+    }
+  }
+
   // === File Operations ===
 
   Future<FileItem> addFile(File sourceFile, String targetFolderPath) async {
     final folderDir = Directory(p.join(storageDir.path, targetFolderPath));
     await folderDir.create(recursive: true);
+
+    // Ensure all parent folders exist in database
+    if (targetFolderPath.isNotEmpty) {
+      await _ensureFolderPathExists(targetFolderPath);
+    }
 
     String fileName = p.basename(sourceFile.path);
     String targetPath = p.join(folderDir.path, fileName);
@@ -296,6 +348,21 @@ class FileSystemStorage {
     final folderPath = parentPath.isEmpty ? '$name/' : '$parentPath$name/';
     final dir = Directory(p.join(storageDir.path, folderPath));
     await dir.create(recursive: true);
+
+    // Add to database
+    final now = DateTime.now();
+    await CrdtDatabase.instance.execute(
+      '''
+      INSERT OR REPLACE INTO folders (path, name, parent_path, created_at)
+      VALUES (?, ?, ?, ?)
+      ''',
+      [
+        folderPath,
+        name,
+        parentPath,
+        now.millisecondsSinceEpoch,
+      ],
+    );
   }
 
   Future<void> deleteFolder(String path) async {
@@ -308,6 +375,19 @@ class FileSystemStorage {
     }
 
     await dir.delete();
+
+    // Soft delete from database
+    await CrdtDatabase.instance.execute(
+      '''
+      UPDATE folders
+      SET deleted_at = ?
+      WHERE path = ?
+      ''',
+      [
+        DateTime.now().millisecondsSinceEpoch,
+        path,
+      ],
+    );
   }
 
   Future<void> renameFolder(String oldPath, String newName) async {
@@ -321,6 +401,24 @@ class FileSystemStorage {
 
     // Rename directory
     await oldDir.rename(newDir.path);
+
+    // Update folder record in database
+    final parentParts = parts.sublist(0, parts.length - 1);
+    final parentPath = parentParts.isEmpty ? '' : '${parentParts.join('/')}/';
+
+    await CrdtDatabase.instance.execute(
+      '''
+      UPDATE folders
+      SET path = ?, name = ?, parent_path = ?
+      WHERE path = ?
+      ''',
+      [
+        newPath,
+        newName,
+        parentPath,
+        oldPath,
+      ],
+    );
 
     // Update all files in this folder and subfolders
     final files = await CrdtDatabase.instance.query(
@@ -349,6 +447,32 @@ class FileSystemStorage {
         ],
       );
     }
+
+    // Update all subfolders
+    final subfolders = await CrdtDatabase.instance.query(
+      'SELECT * FROM folders WHERE path LIKE ? AND path != ?',
+      ['$oldPath%', oldPath],
+    );
+
+    for (final folderMap in subfolders) {
+      final subfolderPath = folderMap['path'] as String;
+      final newSubfolderPath = subfolderPath.replaceFirst(oldPath, newPath);
+      final subfolderParentPath = folderMap['parent_path'] as String;
+      final newSubfolderParentPath = subfolderParentPath.replaceFirst(oldPath, newPath);
+
+      await CrdtDatabase.instance.execute(
+        '''
+        UPDATE folders
+        SET path = ?, parent_path = ?
+        WHERE path = ?
+        ''',
+        [
+          newSubfolderPath,
+          newSubfolderParentPath,
+          subfolderPath,
+        ],
+      );
+    }
   }
 
   // === Queries ===
@@ -372,46 +496,22 @@ class FileSystemStorage {
   }
 
   Future<List<FolderItem>> getFoldersInPath(String folderPath) async {
-    // Get folders from database metadata (files' folder_path column)
-    // This is important for sync: folders may exist in metadata before physical files arrive
-    final pattern = folderPath.isEmpty ? '%/' : '$folderPath%/';
+    // Query the folders table directly
     final results = await CrdtDatabase.instance.query(
       '''
-      SELECT DISTINCT folder_path FROM files
-      WHERE folder_path LIKE ? AND is_deleted = 0 AND deleted_at IS NULL
+      SELECT * FROM folders
+      WHERE parent_path = ? AND deleted_at IS NULL
+      ORDER BY name COLLATE NOCASE
       ''',
-      [pattern],
+      [folderPath],
     );
 
-    final folderPaths = <String>{};
-    for (final row in results) {
-      final path = row['folder_path'] as String;
-      // Extract immediate subfolder
-      if (folderPath.isEmpty) {
-        // Root level - get first segment
-        final firstSlash = path.indexOf('/');
-        if (firstSlash > 0) {
-          folderPaths.add(path.substring(0, firstSlash + 1));
-        }
-      } else {
-        // Subfolder level - get next segment after current path
-        if (path.startsWith(folderPath) && path.length > folderPath.length) {
-          final remainder = path.substring(folderPath.length);
-          final nextSlash = remainder.indexOf('/');
-          if (nextSlash > 0) {
-            folderPaths.add('$folderPath${remainder.substring(0, nextSlash + 1)}');
-          }
-        }
-      }
-    }
-
-    final folders = folderPaths.map((path) {
-      final parts = path.split('/').where((p) => p.isNotEmpty).toList();
-      final name = parts.last;
-      return FolderItem(name: name, path: path);
+    final folders = results.map((row) {
+      return FolderItem(
+        name: row['name'] as String,
+        path: row['path'] as String,
+      );
     }).toList();
-
-    folders.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
     print('[FileSystem] getFoldersInPath("$folderPath") found ${folders.length} folders: ${folders.map((f) => f.name).toList()}');
 

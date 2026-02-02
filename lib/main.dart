@@ -78,7 +78,7 @@ void main() async {
       try {
         await CrdtDatabase.instance.init(
           'crdt_test.db',
-          5, // Bumped version to 5 for LMS tables
+          6, // Bumped version to 6 for sort_order column rename
           (db, version) async {
             // Create a metadata table for CRDT
             await db.execute('''
@@ -173,7 +173,7 @@ void main() async {
                 course_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT,
-                "order" INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 deleted_at INTEGER,
@@ -193,7 +193,7 @@ void main() async {
                 module_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT,
-                "order" INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 deleted_at INTEGER,
@@ -214,7 +214,7 @@ void main() async {
                 name TEXT NOT NULL,
                 description TEXT,
                 type TEXT NOT NULL,
-                "order" INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL,
                 file_id TEXT,
                 resource_type TEXT,
                 created_at INTEGER NOT NULL,
@@ -318,7 +318,7 @@ void main() async {
                   course_id TEXT NOT NULL,
                   name TEXT NOT NULL,
                   description TEXT,
-                  "order" INTEGER NOT NULL,
+                  sort_order INTEGER NOT NULL,
                   created_at INTEGER NOT NULL,
                   updated_at INTEGER NOT NULL,
                   deleted_at INTEGER,
@@ -337,7 +337,7 @@ void main() async {
                   module_id TEXT NOT NULL,
                   name TEXT NOT NULL,
                   description TEXT,
-                  "order" INTEGER NOT NULL,
+                  sort_order INTEGER NOT NULL,
                   created_at INTEGER NOT NULL,
                   updated_at INTEGER NOT NULL,
                   deleted_at INTEGER,
@@ -357,7 +357,7 @@ void main() async {
                   name TEXT NOT NULL,
                   description TEXT,
                   type TEXT NOT NULL,
-                  "order" INTEGER NOT NULL,
+                  sort_order INTEGER NOT NULL,
                   file_id TEXT,
                   resource_type TEXT,
                   created_at INTEGER NOT NULL,
@@ -371,6 +371,22 @@ void main() async {
               await db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_lms_activities_subsection_id ON lms_activities(subsection_id)
               ''');
+            }
+
+            // Migration from version 5 to 6: Rename "order" to "sort_order" in LMS tables
+            if (oldVersion < 6) {
+              print('[Migration] Renaming order columns to sort_order...');
+
+              // For lms_modules
+              await db.execute('ALTER TABLE lms_modules RENAME COLUMN "order" TO sort_order');
+
+              // For lms_subsections
+              await db.execute('ALTER TABLE lms_subsections RENAME COLUMN "order" TO sort_order');
+
+              // For lms_activities
+              await db.execute('ALTER TABLE lms_activities RENAME COLUMN "order" TO sort_order');
+
+              print('[Migration] Column renaming complete!');
             }
           },
         );
@@ -386,7 +402,7 @@ void main() async {
     try {
       await CrdtDatabase.instance.init(
         'crdt_main.db',
-        5, // Bumped version to 5 for LMS tables
+        6, // Bumped version to 6 for sort_order column rename
         (db, version) async {
           // Create a metadata table for CRDT
           await db.execute('''
@@ -481,7 +497,7 @@ void main() async {
               course_id TEXT NOT NULL,
               name TEXT NOT NULL,
               description TEXT,
-              "order" INTEGER NOT NULL,
+              sort_order INTEGER NOT NULL,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL,
               deleted_at INTEGER,
@@ -501,7 +517,7 @@ void main() async {
               module_id TEXT NOT NULL,
               name TEXT NOT NULL,
               description TEXT,
-              "order" INTEGER NOT NULL,
+              sort_order INTEGER NOT NULL,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL,
               deleted_at INTEGER,
@@ -522,7 +538,7 @@ void main() async {
               name TEXT NOT NULL,
               description TEXT,
               type TEXT NOT NULL,
-              "order" INTEGER NOT NULL,
+              sort_order INTEGER NOT NULL,
               file_id TEXT,
               resource_type TEXT,
               created_at INTEGER NOT NULL,
@@ -626,7 +642,7 @@ void main() async {
                 course_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT,
-                "order" INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 deleted_at INTEGER,
@@ -645,7 +661,7 @@ void main() async {
                 module_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT,
-                "order" INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 deleted_at INTEGER,
@@ -665,7 +681,7 @@ void main() async {
                 name TEXT NOT NULL,
                 description TEXT,
                 type TEXT NOT NULL,
-                "order" INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL,
                 file_id TEXT,
                 resource_type TEXT,
                 created_at INTEGER NOT NULL,
@@ -679,6 +695,22 @@ void main() async {
             await db.execute('''
               CREATE INDEX IF NOT EXISTS idx_lms_activities_subsection_id ON lms_activities(subsection_id)
             ''');
+          }
+
+          // Migration from version 5 to 6: Rename "order" to "sort_order" in LMS tables
+          if (oldVersion < 6) {
+            print('[Migration] Renaming order columns to sort_order...');
+
+            // For lms_modules
+            await db.execute('ALTER TABLE lms_modules RENAME COLUMN "order" TO sort_order');
+
+            // For lms_subsections
+            await db.execute('ALTER TABLE lms_subsections RENAME COLUMN "order" TO sort_order');
+
+            // For lms_activities
+            await db.execute('ALTER TABLE lms_activities RENAME COLUMN "order" TO sort_order');
+
+            print('[Migration] Column renaming complete!');
           }
         },
       );
@@ -798,10 +830,33 @@ Future<void> _initSyncService() async {
 
   syncService.setApplyChangesCallback((_, entities) async {
     try {
+      // Known tables that we can sync
+      const knownTables = {
+        '_crdt_metadata',
+        'notes',
+        'chats',
+        'messages',
+        'vocabulary_words',
+        'lms_courses',
+        'lms_modules',
+        'lms_subsections',
+        'lms_activities',
+        'files',
+        'folders',
+        'derivatives',
+      };
+
       // Use CrdtDatabase (works on all platforms as fallback)
       final changeset = <String, List<Map<String, dynamic>>>{};
       for (final entity in entities) {
         final table = entity['table'] as String;
+
+        // Skip unknown tables
+        if (!knownTables.contains(table)) {
+          print('[Sync] Skipping unknown table: $table');
+          continue;
+        }
+
         final data = Map<String, dynamic>.from(entity['data'] as Map<String, dynamic>);
 
         // Convert HLC strings back to Hlc objects if present
@@ -810,6 +865,13 @@ Future<void> _initSyncService() async {
         }
         if (data['modified'] is String) {
           data['modified'] = Hlc.parse(data['modified'] as String);
+        }
+
+        // Migration: Rename "order" to "sort_order" for LMS tables
+        if ((table == 'lms_modules' || table == 'lms_subsections' || table == 'lms_activities') &&
+            data.containsKey('order')) {
+          data['sort_order'] = data['order'];
+          data.remove('order');
         }
 
         changeset.putIfAbsent(table, () => []).add(data);

@@ -190,7 +190,7 @@ class LmsCrdtStorageService {
 
   Future<List<LessonModule>> _loadModulesForCourse(String courseId) async {
     final rows = await CrdtDatabase.instance.query(
-      'SELECT * FROM lms_modules WHERE course_id = ? AND deleted_at IS NULL ORDER BY "order"',
+      'SELECT * FROM lms_modules WHERE course_id = ? AND deleted_at IS NULL ORDER BY sort_order',
       [courseId],
     );
 
@@ -210,7 +210,7 @@ class LmsCrdtStorageService {
       courseId: row['course_id'] as String,
       name: row['name'] as String,
       description: row['description'] as String?,
-      order: row['order'] as int,
+      order: row['sort_order'] as int,
       createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
       subSections: subsections,
     );
@@ -233,7 +233,7 @@ class LmsCrdtStorageService {
       // Insert new module
       await CrdtDatabase.instance.execute(
         '''INSERT INTO lms_modules
-           (id, course_id, name, description, "order", created_at, updated_at, deleted_at, device_id, sync_version)
+           (id, course_id, name, description, sort_order, created_at, updated_at, deleted_at, device_id, sync_version)
            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 1)''',
         [
           moduleId,
@@ -251,7 +251,7 @@ class LmsCrdtStorageService {
       final currentVersion = existingRows.first['sync_version'] as int;
       await CrdtDatabase.instance.execute(
         '''UPDATE lms_modules
-           SET name = ?, description = ?, "order" = ?, updated_at = ?, device_id = ?, sync_version = ?
+           SET name = ?, description = ?, sort_order = ?, updated_at = ?, device_id = ?, sync_version = ?
            WHERE id = ?''',
         [
           module.name,
@@ -347,7 +347,7 @@ class LmsCrdtStorageService {
 
         await CrdtDatabase.instance.execute(
           '''UPDATE lms_modules
-             SET "order" = ?, updated_at = ?, device_id = ?, sync_version = ?
+             SET sort_order = ?, updated_at = ?, device_id = ?, sync_version = ?
              WHERE id = ?''',
           [
             i,
@@ -367,7 +367,7 @@ class LmsCrdtStorageService {
 
   Future<List<LessonSubSection>> _loadSubsectionsForModule(String moduleId) async {
     final rows = await CrdtDatabase.instance.query(
-      'SELECT * FROM lms_subsections WHERE module_id = ? AND deleted_at IS NULL ORDER BY "order"',
+      'SELECT * FROM lms_subsections WHERE module_id = ? AND deleted_at IS NULL ORDER BY sort_order',
       [moduleId],
     );
 
@@ -387,7 +387,7 @@ class LmsCrdtStorageService {
       moduleId: row['module_id'] as String,
       name: row['name'] as String,
       description: row['description'] as String?,
-      order: row['order'] as int,
+      order: row['sort_order'] as int,
       createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
       activities: activities,
     );
@@ -414,7 +414,7 @@ class LmsCrdtStorageService {
       // Insert new subsection
       await CrdtDatabase.instance.execute(
         '''INSERT INTO lms_subsections
-           (id, module_id, name, description, "order", created_at, updated_at, deleted_at, device_id, sync_version)
+           (id, module_id, name, description, sort_order, created_at, updated_at, deleted_at, device_id, sync_version)
            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 1)''',
         [
           subsectionId,
@@ -432,7 +432,7 @@ class LmsCrdtStorageService {
       final currentVersion = existingRows.first['sync_version'] as int;
       await CrdtDatabase.instance.execute(
         '''UPDATE lms_subsections
-           SET name = ?, description = ?, "order" = ?, updated_at = ?, device_id = ?, sync_version = ?
+           SET name = ?, description = ?, sort_order = ?, updated_at = ?, device_id = ?, sync_version = ?
            WHERE id = ?''',
         [
           subSection.name,
@@ -538,7 +538,7 @@ class LmsCrdtStorageService {
 
         await CrdtDatabase.instance.execute(
           '''UPDATE lms_subsections
-             SET "order" = ?, updated_at = ?, device_id = ?, sync_version = ?
+             SET sort_order = ?, updated_at = ?, device_id = ?, sync_version = ?
              WHERE id = ?''',
           [
             i,
@@ -558,7 +558,7 @@ class LmsCrdtStorageService {
 
   Future<List<Activity>> _loadActivitiesForSubsection(String subsectionId) async {
     final rows = await CrdtDatabase.instance.query(
-      'SELECT * FROM lms_activities WHERE subsection_id = ? AND deleted_at IS NULL ORDER BY "order"',
+      'SELECT * FROM lms_activities WHERE subsection_id = ? AND deleted_at IS NULL ORDER BY sort_order',
       [subsectionId],
     );
 
@@ -587,7 +587,7 @@ class LmsCrdtStorageService {
         name: row['name'] as String,
         description: row['description'] as String?,
         createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
-        order: row['order'] as int,
+        order: row['sort_order'] as int,
         fileId: row['file_id'] as String?,
         resourceType: resourceType,
       );
@@ -626,7 +626,7 @@ class LmsCrdtStorageService {
       // Insert new activity
       await CrdtDatabase.instance.execute(
         '''INSERT INTO lms_activities
-           (id, subsection_id, name, description, type, "order", file_id, resource_type, created_at, updated_at, deleted_at, device_id, sync_version)
+           (id, subsection_id, name, description, type, sort_order, file_id, resource_type, created_at, updated_at, deleted_at, device_id, sync_version)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 1)''',
         [
           activityId,
@@ -647,7 +647,7 @@ class LmsCrdtStorageService {
       final currentVersion = existingRows.first['sync_version'] as int;
       await CrdtDatabase.instance.execute(
         '''UPDATE lms_activities
-           SET name = ?, description = ?, "order" = ?, file_id = ?, resource_type = ?, updated_at = ?, device_id = ?, sync_version = ?
+           SET name = ?, description = ?, sort_order = ?, file_id = ?, resource_type = ?, updated_at = ?, device_id = ?, sync_version = ?
            WHERE id = ?''',
         [
           activity.name,
@@ -746,7 +746,7 @@ class LmsCrdtStorageService {
 
         await CrdtDatabase.instance.execute(
           '''UPDATE lms_activities
-             SET "order" = ?, updated_at = ?, device_id = ?, sync_version = ?
+             SET sort_order = ?, updated_at = ?, device_id = ?, sync_version = ?
              WHERE id = ?''',
           [
             i,
