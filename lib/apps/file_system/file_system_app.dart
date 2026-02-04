@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/sub_app.dart';
+import '../../core/search_result.dart';
 import 'services/file_system_storage.dart';
 import 'screens/file_browser_screen.dart';
 
@@ -31,5 +32,36 @@ class FileSystemApp extends SubApp {
   @override
   Widget build(BuildContext context) {
     return FileBrowserScreen();
+  }
+
+  @override
+  bool get supportsSearch => true;
+
+  @override
+  Future<List<SearchResult>> search(String query) async {
+    final files = await FileSystemStorage.instance.search(query);
+    return files.map((file) {
+      return SearchResult(
+        id: file.id,
+        type: SearchResultType.file,
+        appId: id,
+        title: file.name,
+        subtitle: file.folderPath,
+        preview: null,
+        navigationData: {'fileId': file.id, 'folderPath': file.folderPath},
+        timestamp: file.updatedAt,
+      );
+    }).toList();
+  }
+
+  @override
+  void navigateToSearchResult(BuildContext context, SearchResult result) {
+    // Open the file system app
+    // Note: FileBrowserScreen doesn't support direct navigation to a specific file yet
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => FileBrowserScreen(),
+      ),
+    );
   }
 }

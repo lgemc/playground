@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../core/sub_app.dart';
+import '../../core/search_result.dart';
 import '../../core/tool.dart';
 import '../../services/share_content.dart';
 import '../../services/tool_service.dart';
 import 'models/word.dart';
 import 'services/vocabulary_storage.dart';
 import 'vocabulary_screen.dart';
+import 'word_editor_screen.dart';
 
 /// Configuration keys for the vocabulary app
 class VocabularyConfig {
@@ -113,6 +115,56 @@ class VocabularyApp extends SubApp {
         final word = Word.create(word: text);
         await VocabularyStorage.instance.saveWord(word);
       }
+    }
+  }
+
+  @override
+  bool get supportsSearch => true;
+
+  @override
+  Future<List<SearchResult>> search(String query) async {
+    final words = await VocabularyStorage.instance.search(query);
+    return words.map((word) {
+      // Create a preview with the first sample phrase if available
+      String? preview;
+      if (word.samplePhrases.isNotEmpty) {
+        preview = word.samplePhrases.first;
+        if (preview.length > 80) {
+          preview = '${preview.substring(0, 80)}...';
+        }
+      }
+
+      return SearchResult(
+        id: word.id,
+        type: SearchResultType.vocabularyWord,
+        appId: id,
+        title: word.word,
+        subtitle: word.meaning.isEmpty ? null : word.meaning,
+        preview: preview,
+        navigationData: {'wordId': word.id},
+        timestamp: word.updatedAt,
+      );
+    }).toList();
+  }
+
+  @override
+  void navigateToSearchResult(BuildContext context, SearchResult result) async {
+    final wordId = result.navigationData['wordId'] as String;
+    final word = await VocabularyStorage.instance.getWord(wordId);
+    if (word == null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Word not found')),
+        );
+      }
+      return;
+    }
+    if (context.mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => WordEditorScreen(word: word),
+        ),
+      );
     }
   }
 }

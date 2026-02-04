@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../models/derivative_artifact.dart';
 import '../services/file_system_storage.dart';
+import '../../../models/transcript.dart';
+import '../../video_viewer/screens/transcript_viewer_screen.dart';
 
 class DerivativeTile extends StatelessWidget {
   final DerivativeArtifact derivative;
@@ -84,8 +86,28 @@ class DerivativeTile extends StatelessWidget {
       // For auto_title, show apply rename dialog instead of viewing
       if (derivative.type == 'auto_title' && onApplyRename != null) {
         _showApplyRenameDialog(context, content);
-      } else {
-        // Display markdown content
+      }
+      // For transcript, show special viewer with segments
+      else if (derivative.type == 'transcript') {
+        try {
+          final transcript = Transcript.fromJsonString(content);
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => TranscriptViewerScreen(
+                transcript: transcript,
+                fileName: transcript.sourceFile ?? 'Unknown',
+              ),
+            ),
+          );
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to load transcript: $e')),
+          );
+        }
+      }
+      // Default: display markdown content
+      else {
         Navigator.push(
           context,
           MaterialPageRoute(

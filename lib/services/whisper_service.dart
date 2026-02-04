@@ -36,19 +36,17 @@ class WhisperService {
     return url != null && url.isNotEmpty;
   }
 
-  /// Transcribe an audio/video file using the OpenAI-compatible API.
+  /// Transcribe an audio/video file using the /transcribe API.
   ///
-  /// Returns the transcribed text.
+  /// Returns the full transcription response with segments and word-level data.
   /// Throws [FileSystemException] if the file doesn't exist.
   /// Throws [HttpException] if the API request fails.
-  Future<String> transcribe(String filePath) async {
+  Future<Map<String, dynamic>> transcribeDetailed(String filePath) async {
     final file = File(filePath);
     if (!await file.exists()) {
       throw FileSystemException('File not found', filePath);
     }
 
-    final model =
-        _config.get(WhisperConfig.model) ?? WhisperConfig.defaultModel;
     final language =
         _config.get(WhisperConfig.language) ?? WhisperConfig.defaultLanguage;
     final timeoutSeconds = int.tryParse(
@@ -56,10 +54,9 @@ class WhisperService {
         ) ??
         int.parse(WhisperConfig.defaultTimeoutSeconds);
 
-    final uri = Uri.parse('$_baseUrl/v1/audio/transcriptions');
+    final uri = Uri.parse('$_baseUrl/transcribe');
 
     final request = http.MultipartRequest('POST', uri)
-      ..fields['model'] = model
       ..fields['language'] = language
       ..files.add(await http.MultipartFile.fromPath('file', filePath));
 
@@ -79,13 +76,33 @@ class WhisperService {
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final text = data['text'] as String?;
 
-    if (text == null || text.isEmpty) {
-      throw StateError('Transcription completed but no text returned');
+    if (data['status'] != 'success') {
+      throw StateError('Transcription failed: ${data['status']}');
     }
 
-    return text;
+    return data;
+  }
+
+  /// Transcribe an audio/video file and return only the text.
+  ///
+  /// Returns the transcribed text concatenated from all segments.
+  /// Throws [FileSystemException] if the file doesn't exist.
+  /// Throws [HttpException] if the API request fails.
+  Future<String> transcribe(String filePath) async {
+    final data = await transcribeDetailed(filePath);
+
+    final segments = data['segments'] as List<dynamic>?;
+    if (segments == null || segments.isEmpty) {
+      throw StateError('Transcription completed but no segments returned');
+    }
+
+    // Concatenate all segment texts
+    return segments
+        .map((seg) => (seg as Map<String, dynamic>)['text'] as String?)
+        .where((text) => text != null && text.isNotEmpty)
+        .join(' ')
+        .trim();
   }
 
   /// Alias for transcribe() to maintain API compatibility.

@@ -5,6 +5,7 @@ import '../services/file_system_storage.dart';
 import '../widgets/derivative_tile.dart';
 import 'derivative_generator_dialog.dart';
 import 'pdf_reader_screen.dart';
+import '../../video_viewer/screens/video_player_screen.dart';
 import '../../../services/share_service.dart';
 import '../../../services/share_content.dart';
 import 'dart:async';
@@ -23,6 +24,7 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
   List<DerivativeArtifact> _derivatives = [];
   bool _isLoading = true;
   Timer? _refreshTimer;
+  final Set<String> _deletedIds = {}; // Track deleted IDs to prevent re-appearing
 
   @override
   void initState() {
@@ -45,7 +47,8 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
     final derivatives = await _storage.getDerivatives(widget.file.id);
     if (mounted) {
       setState(() {
-        _derivatives = derivatives;
+        // Filter out any derivatives that were deleted
+        _derivatives = derivatives.where((d) => !_deletedIds.contains(d.id)).toList();
         _isLoading = false;
       });
     }
@@ -63,12 +66,27 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
   }
 
   void _openFile() {
-    if (widget.file.extension.toLowerCase() == 'pdf') {
+    final ext = widget.file.extension.toLowerCase();
+    final filePath = _storage.getAbsolutePath(widget.file);
+
+    if (ext == 'pdf') {
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => PdfReaderScreen(
-            filePath: _storage.getAbsolutePath(widget.file),
+            filePath: filePath,
+            fileName: widget.file.name,
+          ),
+        ),
+      );
+    } else if (ext == 'mp4' || ext == 'mkv' || ext == 'avi' ||
+               ext == 'mov' || ext == 'webm' || ext == 'flv' ||
+               ext == 'm4v' || ext == '3gp') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => VideoPlayerScreen(
+            filePath: filePath,
             fileName: widget.file.name,
           ),
         ),
@@ -94,32 +112,28 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
   }
 
   Future<void> _deleteDerivative(DerivativeArtifact derivative) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Derivative'),
-        content: Text(
-          'Are you sure you want to delete this ${derivative.type}?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.red,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
+    // Track deleted ID to prevent it from reappearing during auto-refresh
+    _deletedIds.add(derivative.id);
 
-    if (confirmed == true) {
+    // Immediately remove from local list to avoid rebuild issues with Dismissible
+    setState(() {
+      _derivatives.removeWhere((d) => d.id == derivative.id);
+    });
+
+    // Delete the derivative (confirmation already shown by Dismissible)
+    try {
       await _storage.deleteDerivative(derivative.id);
-      await _loadDerivatives();
+    } catch (e) {
+      // Remove from deleted set if deletion failed
+      _deletedIds.remove(derivative.id);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete: $e')),
+        );
+        // Reload to restore the item if deletion failed
+        _loadDerivatives();
+      }
     }
   }
 

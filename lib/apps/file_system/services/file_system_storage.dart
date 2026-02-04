@@ -564,6 +564,19 @@ class FileSystemStorage {
     return p.join(storageDir.path, file.relativePath);
   }
 
+  Future<FileItem?> getFileById(String id) async {
+    final files = await CrdtDatabase.instance.query(
+      'SELECT * FROM files WHERE id = ? AND deleted_at IS NULL',
+      [id],
+    );
+
+    if (files.isEmpty) {
+      return null;
+    }
+
+    return FileItem.fromMap(files.first);
+  }
+
   // === Derivative Operations ===
 
   Future<List<DerivativeArtifact>> getDerivatives(String fileId) async {

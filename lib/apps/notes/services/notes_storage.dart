@@ -73,6 +73,27 @@ class NotesStorage {
     );
   }
 
+  /// Search notes by title or content
+  Future<List<model.Note>> search(String query) async {
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, title, content, created_at, updated_at
+      FROM notes
+      WHERE (title LIKE ? OR content LIKE ?) AND deleted_at IS NULL
+      ORDER BY updated_at DESC
+      LIMIT 50
+    ''', ['%$query%', '%$query%']);
+
+    return results.map((row) {
+      return model.Note(
+        id: row['id'] as String,
+        title: row['title'] as String,
+        content: row['content'] as String,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+      );
+    }).toList();
+  }
+
   /// Save (create or update) a note
   Future<void> saveNote(model.Note note) async {
     final deviceId = await DeviceIdService.instance.getDeviceId();

@@ -58,6 +58,7 @@ dependencies:
   crypto: ^3.0.3
   multicast_dns: ^0.3.2
   network_info_plus: ^5.0.0
+  video_player: ^2.8.1
 
 dev_dependencies:
   flutter_test:

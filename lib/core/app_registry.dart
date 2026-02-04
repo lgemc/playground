@@ -41,6 +41,9 @@ class AppRegistry {
   /// Get all registered apps (for backward compatibility - returns factories)
   List<SubApp> get apps => _appDefinitions.values.map((def) => def.factory()).toList();
 
+  /// Get all registered app instances
+  List<SubApp> getAllApps() => _appDefinitions.values.map((def) => def.factory()).toList();
+
   /// Register a sub-app (accepts instance for backward compatibility)
   void register(SubApp app) async {
     // Create a factory that returns the app instance

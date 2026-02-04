@@ -22,9 +22,16 @@ class DerivativeQueueConsumer extends QueueConsumer {
   @override
   Future<bool> processMessage(QueueMessage message) async {
     try {
+      print('[DerivativeConsumer] ===== Processing message =====');
+      print('[DerivativeConsumer] Payload: ${message.payload}');
+
       final derivativeId = message.payload['derivative_id'] as String?;
       final fileId = message.payload['file_id'] as String?;
       final type = message.payload['type'] as String?;
+
+      print('[DerivativeConsumer] derivativeId: $derivativeId');
+      print('[DerivativeConsumer] fileId: $fileId');
+      print('[DerivativeConsumer] type: $type');
 
       if (derivativeId == null || fileId == null || type == null) {
         _logger.log(
@@ -40,34 +47,29 @@ class DerivativeQueueConsumer extends QueueConsumer {
       );
 
       // Load the derivative from storage
+      print('[DerivativeConsumer] Loading derivative from storage...');
       final derivative = await _storage.getDerivative(derivativeId);
       if (derivative == null) {
+        print('[DerivativeConsumer] ERROR: Derivative not found');
         _logger.log(
           'Derivative not found: $derivativeId',
           severity: LogSeverity.error,
         );
         return false;
       }
+      print('[DerivativeConsumer] Derivative loaded: ${derivative.type}');
 
       // Update status to processing
+      print('[DerivativeConsumer] Updating status to processing...');
       await _storage.updateDerivative(derivativeId, status: 'processing');
 
-      // Get the file
-      final files = await _storage.getFilesInFolder('');
-      FileItem? file;
-
-      // Search for file in all folders
-      for (final folder in await _getAllFolders()) {
-        final folderFiles = await _storage.getFilesInFolder(folder);
-        file = folderFiles.where((f) => f.id == fileId).firstOrNull;
-        if (file != null) break;
-      }
-
-      // Try current folder
-      file ??= files.where((f) => f.id == fileId).firstOrNull;
+      // Get the file directly by ID
+      print('[DerivativeConsumer] Getting file by ID: $fileId');
+      final file = await _storage.getFileById(fileId);
 
       if (file == null) {
-        final errorMsg = 'File not found: $fileId';
+        final errorMsg = 'File not found in database: $fileId';
+        print('[DerivativeConsumer] ERROR: $errorMsg');
         _logger.log(errorMsg, severity: LogSeverity.error);
         await _storage.updateDerivative(
           derivativeId,
@@ -77,10 +79,18 @@ class DerivativeQueueConsumer extends QueueConsumer {
         return false;
       }
 
+      print('[DerivativeConsumer] Found file: ${file.name}');
+      _logger.log(
+        'Found file: ${file.name} (id: ${file.id}, path: ${file.relativePath})',
+        severity: LogSeverity.info,
+      );
+
       // Get the generator for this type
+      print('[DerivativeConsumer] Getting generator for type: $type');
       final generator = _derivativeService.getGenerator(type);
       if (generator == null) {
         final errorMsg = 'No generator found for type: $type';
+        print('[DerivativeConsumer] ERROR: $errorMsg');
         _logger.log(errorMsg, severity: LogSeverity.error);
         await _storage.updateDerivative(
           derivativeId,
@@ -90,8 +100,11 @@ class DerivativeQueueConsumer extends QueueConsumer {
         return false;
       }
 
+      print('[DerivativeConsumer] Generator found: ${generator.displayName}');
+      print('[DerivativeConsumer] Starting generation...');
       // Generate the derivative content
       final content = await generator.generate(file);
+      print('[DerivativeConsumer] Generation complete, content length: ${content.length}');
 
       // Save the content
       await _storage.setDerivativeContent(derivativeId, content);
@@ -105,6 +118,10 @@ class DerivativeQueueConsumer extends QueueConsumer {
       );
       return true;
     } catch (e, stackTrace) {
+      print('[DerivativeConsumer] ===== ERROR =====');
+      print('[DerivativeConsumer] Exception: $e');
+      print('[DerivativeConsumer] StackTrace: $stackTrace');
+
       _logger.log(
         'Error processing derivative: $e\n$stackTrace',
         severity: LogSeverity.error,
@@ -126,17 +143,5 @@ class DerivativeQueueConsumer extends QueueConsumer {
 
       return false;
     }
-  }
-
-  Future<List<String>> _getAllFolders() async {
-    final folders = <String>[];
-    final rootFolders = await _storage.getFoldersInPath('');
-
-    for (final folder in rootFolders) {
-      folders.add(folder.path);
-      // Could recursively get subfolders here if needed
-    }
-
-    return folders;
   }
 }

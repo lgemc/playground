@@ -14,6 +14,7 @@ import 'apps/launcher/launcher_screen.dart';
 import 'apps/logs/logs_app.dart';
 import 'apps/notes/notes_app.dart';
 import 'apps/queues/queues_app.dart';
+import 'apps/search/search_app.dart';
 import 'apps/settings/settings_app.dart';
 import 'apps/vocabulary/vocabulary_app.dart';
 import 'apps/vocabulary/services/vocabulary_definition_service.dart';
@@ -78,7 +79,7 @@ void main() async {
       try {
         await CrdtDatabase.instance.init(
           'crdt_test.db',
-          6, // Bumped version to 6 for sort_order column rename
+          7, // Bumped version to 7 for transcript_segments table
           (db, version) async {
             // Create a metadata table for CRDT
             await db.execute('''
@@ -227,6 +228,18 @@ void main() async {
 
             await db.execute('''
               CREATE INDEX IF NOT EXISTS idx_lms_activities_subsection_id ON lms_activities(subsection_id)
+            ''');
+
+            // Create transcript_segments table for marking relevant segments
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS transcript_segments (
+                file_name TEXT NOT NULL,
+                segment_start REAL NOT NULL,
+                segment_end REAL NOT NULL,
+                is_relevant INTEGER NOT NULL DEFAULT 0,
+                marked_at INTEGER,
+                PRIMARY KEY (file_name, segment_start, segment_end)
+              )
             ''');
           },
           onUpgrade: (db, oldVersion, newVersion) async {
@@ -388,6 +401,24 @@ void main() async {
 
               print('[Migration] Column renaming complete!');
             }
+
+            // Migration from version 6 to 7: Add transcript_segments table
+            if (oldVersion < 7) {
+              print('[Migration] Adding transcript_segments table...');
+
+              await db.execute('''
+                CREATE TABLE IF NOT EXISTS transcript_segments (
+                  file_name TEXT NOT NULL,
+                  segment_start REAL NOT NULL,
+                  segment_end REAL NOT NULL,
+                  is_relevant INTEGER NOT NULL DEFAULT 0,
+                  marked_at INTEGER,
+                  PRIMARY KEY (file_name, segment_start, segment_end)
+                )
+              ''');
+
+              print('[Migration] transcript_segments table created!');
+            }
           },
         );
         print('✅ CRDT database initialized successfully!');
@@ -402,7 +433,7 @@ void main() async {
     try {
       await CrdtDatabase.instance.init(
         'crdt_main.db',
-        6, // Bumped version to 6 for sort_order column rename
+        7, // Bumped version to 7 for transcript_segments table
         (db, version) async {
           // Create a metadata table for CRDT
           await db.execute('''
@@ -552,8 +583,20 @@ void main() async {
           await db.execute('''
             CREATE INDEX IF NOT EXISTS idx_lms_activities_subsection_id ON lms_activities(subsection_id)
           ''');
+
+          // Create transcript_segments table for marking relevant segments
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS transcript_segments (
+              file_name TEXT NOT NULL,
+              segment_start REAL NOT NULL,
+              segment_end REAL NOT NULL,
+              is_relevant INTEGER NOT NULL DEFAULT 0,
+              marked_at INTEGER,
+              PRIMARY KEY (file_name, segment_start, segment_end)
+            )
+          ''');
         },
-        onUpgrade: (db, oldVersion, newVersion) async {
+        onUpgrade: (db, oldVersion, newVersion) async{
           // Migration from version 1 to 2: Add notes table
           if (oldVersion < 2) {
             await db.execute('''
@@ -712,6 +755,24 @@ void main() async {
 
             print('[Migration] Column renaming complete!');
           }
+
+          // Migration from version 6 to 7: Add transcript_segments table
+          if (oldVersion < 7) {
+            print('[Migration] Adding transcript_segments table...');
+
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS transcript_segments (
+                file_name TEXT NOT NULL,
+                segment_start REAL NOT NULL,
+                segment_end REAL NOT NULL,
+                is_relevant INTEGER NOT NULL DEFAULT 0,
+                marked_at INTEGER,
+                PRIMARY KEY (file_name, segment_start, segment_end)
+              )
+            ''');
+
+            print('[Migration] transcript_segments table created!');
+          }
         },
       );
       print('🔧 [Mobile] CRDT database initialized: ${CrdtDatabase.instance.nodeId}');
@@ -750,6 +811,7 @@ void _registerApps() {
   final registry = AppRegistry.instance;
 
   // Register apps
+  registry.register(SearchApp());
   registry.register(SettingsApp());
   registry.register(NotesApp());
   registry.register(VocabularyApp());

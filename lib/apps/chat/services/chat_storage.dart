@@ -52,6 +52,48 @@ class ChatStorage {
     );
   }
 
+  /// Search chats by title
+  Future<List<Chat>> searchChats(String query) async {
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, title, created_at, updated_at, is_title_generating
+      FROM chats
+      WHERE title LIKE ? AND deleted_at IS NULL
+      ORDER BY updated_at DESC
+      LIMIT 50
+    ''', ['%$query%']);
+
+    return results.map((row) {
+      return Chat(
+        id: row['id'] as String,
+        title: row['title'] as String,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+        isTitleGenerating: (row['is_title_generating'] as int) == 1,
+      );
+    }).toList();
+  }
+
+  /// Search messages by content
+  Future<List<Message>> searchMessages(String query) async {
+    final results = await CrdtDatabase.instance.query('''
+      SELECT id, chat_id, content, is_user, created_at
+      FROM messages
+      WHERE content LIKE ? AND deleted_at IS NULL
+      ORDER BY created_at DESC
+      LIMIT 50
+    ''', ['%$query%']);
+
+    return results.map((row) {
+      return Message(
+        id: row['id'] as String,
+        chatId: row['chat_id'] as String,
+        content: row['content'] as String,
+        isUser: (row['is_user'] as int) == 1,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+      );
+    }).toList();
+  }
+
   /// Create a new chat
   Future<void> createChat(Chat chat) async {
     final deviceId = await DeviceIdService.instance.getDeviceId();
@@ -158,26 +200,6 @@ class ChatStorage {
       appId: 'chat',
       metadata: {'chatId': chatId},
     ));
-  }
-
-  /// Search chats by keyword
-  Future<List<Chat>> searchChats(String keyword) async {
-    final results = await CrdtDatabase.instance.query('''
-      SELECT id, title, created_at, updated_at, is_title_generating
-      FROM chats
-      WHERE deleted_at IS NULL AND title LIKE ?
-      ORDER BY updated_at DESC
-    ''', ['%$keyword%']);
-
-    return results.map((row) {
-      return Chat(
-        id: row['id'] as String,
-        title: row['title'] as String,
-        createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
-        updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
-        isTitleGenerating: (row['is_title_generating'] as int) == 1,
-      );
-    }).toList();
   }
 
   /// Get all messages for a chat

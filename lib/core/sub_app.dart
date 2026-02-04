@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/config_service.dart';
 import '../services/share_content.dart';
+import 'search_result.dart';
 
 /// Abstract class that all sub-apps must implement.
 /// Each sub-app is a self-contained module with its own UI and logic.
@@ -72,4 +73,20 @@ abstract class SubApp {
   /// Called when content is shared to this app.
   /// Override this to handle incoming shared content.
   Future<void> onReceiveShare(ShareContent content) async {}
+
+  // Search methods
+
+  /// Whether this app supports search
+  bool get supportsSearch => false;
+
+  /// Search for content within this app
+  /// Override this to implement app-specific search
+  Future<List<SearchResult>> search(String query) async {
+    return [];
+  }
+
+  /// Navigate to a specific search result within this app
+  /// Override this to implement app-specific navigation
+  void navigateToSearchResult(
+      BuildContext context, SearchResult result) {}
 }

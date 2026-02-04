@@ -58,6 +58,18 @@ class VocabularyStorage {
     return rows.isNotEmpty ? _toWord(rows.first) : null;
   }
 
+  /// Search words by word text or meaning
+  Future<List<Word>> search(String query) async {
+    final rows = await CrdtDatabase.instance.query(
+      '''SELECT * FROM vocabulary_words
+         WHERE (word LIKE ? OR meaning LIKE ?) AND deleted_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT 50''',
+      ['%$query%', '%$query%'],
+    );
+    return rows.map(_toWord).toList();
+  }
+
   /// Check if a word with the same text already exists (case-insensitive).
   /// Returns the existing word if found, null otherwise.
   /// Excludes the word with the given [excludeId] from the check.

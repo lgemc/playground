@@ -11,6 +11,7 @@ import 'favorites_screen.dart';
 import 'search_screen.dart';
 import 'pdf_reader_screen.dart';
 import 'file_derivatives_screen.dart';
+import '../../video_viewer/screens/video_player_screen.dart';
 import '../widgets/folder_picker_dialog.dart';
 import '../../../services/share_service.dart';
 import '../../../services/share_content.dart';
@@ -495,8 +496,10 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       return;
     }
 
+    final ext = file.extension.toLowerCase();
+
     // Check if it's a PDF file
-    if (file.extension.toLowerCase() == 'pdf') {
+    if (ext == 'pdf') {
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -506,8 +509,21 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           ),
         ),
       );
+    } else if (ext == 'mp4' || ext == 'mkv' || ext == 'avi' ||
+               ext == 'mov' || ext == 'webm' || ext == 'flv' ||
+               ext == 'm4v' || ext == '3gp') {
+      // Video files
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => VideoPlayerScreen(
+            filePath: filePath,
+            fileName: file.name,
+          ),
+        ),
+      );
     } else {
-      // For non-PDF files, show a message
+      // For other files, show a message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Cannot open ${file.extension} files yet')),
       );
