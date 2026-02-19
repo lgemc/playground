@@ -56,11 +56,11 @@ class FileSystemApp extends SubApp {
 
   @override
   void navigateToSearchResult(BuildContext context, SearchResult result) {
-    // Open the file system app
-    // Note: FileBrowserScreen doesn't support direct navigation to a specific file yet
+    // Navigate to the folder containing the file
+    final folderPath = result.navigationData['folderPath'] as String? ?? '';
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => FileBrowserScreen(),
+        builder: (context) => FileBrowserScreen(initialPath: folderPath),
       ),
     );
   }

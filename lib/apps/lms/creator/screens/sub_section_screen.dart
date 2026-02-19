@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import '../../shared/lms.dart';
 import '../widgets/activity_list_tile.dart';
 import 'activity_form_screen.dart';
+import 'concept_manager_screen.dart';
+import '../../../../core/app_bus.dart';
+import '../../../../core/app_event.dart';
 
 class SubSectionScreen extends StatefulWidget {
   final String courseId;
@@ -111,6 +114,100 @@ class _SubSectionScreenState extends State<SubSectionScreen> {
     _loadSubSection();
   }
 
+  void _viewConcepts(Activity activity) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ConceptManagerScreen(
+          activityId: activity.id,
+          activityName: activity.name,
+          courseId: widget.courseId,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _extractConcepts(Activity activity) async {
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Extract Concepts'),
+        content: Text(
+          'Extract learning concepts from "${activity.name}"?\n\n'
+          'This will analyze the content and create flashcards and quiz questions for spaced repetition learning.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Extract'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // Show loading indicator
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 16),
+              Text('Extracting concepts...'),
+            ],
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+
+    try {
+      // Emit event to trigger concept extraction via queue
+      await AppBus.instance.emit(AppEvent.create(
+        type: 'activity.extract_concepts',
+        appId: 'lms',
+        metadata: {
+          'activity_id': activity.id,
+          'course_id': widget.courseId,
+          'module_id': widget.moduleId,
+          'subsection_id': widget.subSectionId,
+          'activity_name': activity.name,
+          // Note: The actual content will be fetched by the consumer
+          // based on the file attached to the activity
+        },
+      ));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Concept extraction started! Check back soon.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to start extraction: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -166,6 +263,8 @@ class _SubSectionScreenState extends State<SubSectionScreen> {
                   activity: activity,
                   onEdit: () => _navigateToActivityForm(activity),
                   onDelete: () => _deleteActivity(activity),
+                  onExtractConcepts: () => _extractConcepts(activity),
+                  onViewConcepts: () => _viewConcepts(activity),
                 );
               },
             ),

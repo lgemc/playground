@@ -19,14 +19,16 @@ import '../../../services/shared_files_service.dart';
 import '../../../services/generators/auto_title_generator.dart';
 
 class FileBrowserScreen extends StatefulWidget {
-  const FileBrowserScreen({super.key});
+  final String? initialPath;
+
+  const FileBrowserScreen({super.key, this.initialPath});
 
   @override
   State<FileBrowserScreen> createState() => _FileBrowserScreenState();
 }
 
 class _FileBrowserScreenState extends State<FileBrowserScreen> {
-  String _currentPath = '';
+  late String _currentPath;
   List<FolderItem> _folders = [];
   List<FileItem> _files = [];
   bool _isLoading = false;
@@ -37,6 +39,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   @override
   void initState() {
     super.initState();
+    _currentPath = widget.initialPath ?? '';
     _loadContents();
     _initSharedFiles();
   }

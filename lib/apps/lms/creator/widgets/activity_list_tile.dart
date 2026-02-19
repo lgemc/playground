@@ -5,12 +5,16 @@ class ActivityListTile extends StatelessWidget {
   final Activity activity;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback? onExtractConcepts;
+  final VoidCallback? onViewConcepts;
 
   const ActivityListTile({
     super.key,
     required this.activity,
     required this.onEdit,
     required this.onDelete,
+    this.onExtractConcepts,
+    this.onViewConcepts,
   });
 
   @override
@@ -84,7 +88,71 @@ class ActivityListTile extends StatelessWidget {
               ],
             ],
           ),
-          trailing: const Icon(Icons.drag_handle),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (onExtractConcepts != null)
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (value) {
+                    if (value == 'view_concepts') {
+                      onViewConcepts?.call();
+                    } else if (value == 'extract_concepts') {
+                      onExtractConcepts?.call();
+                    } else if (value == 'edit') {
+                      onEdit();
+                    } else if (value == 'delete') {
+                      onDelete();
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    if (onViewConcepts != null)
+                      const PopupMenuItem(
+                        value: 'view_concepts',
+                        child: Row(
+                          children: [
+                            Icon(Icons.list_alt),
+                            SizedBox(width: 8),
+                            Text('View Concepts'),
+                          ],
+                        ),
+                      ),
+                    const PopupMenuItem(
+                      value: 'extract_concepts',
+                      child: Row(
+                        children: [
+                          Icon(Icons.lightbulb_outline),
+                          SizedBox(width: 8),
+                          Text('Extract Concepts'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'edit',
+                      child: Row(
+                        children: [
+                          Icon(Icons.edit),
+                          SizedBox(width: 8),
+                          Text('Edit'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete, color: Colors.red),
+                          SizedBox(width: 8),
+                          Text('Delete', style: TextStyle(color: Colors.red)),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              else
+                const Icon(Icons.drag_handle),
+            ],
+          ),
         ),
       ),
     );

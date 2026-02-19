@@ -53,6 +53,76 @@ This is a Flutter-based modular application container. The core concept is a "pl
 
 **ShareService** (`lib/services/share_service.dart`): Enables content sharing between apps. Apps declare accepted content types via `acceptedShareTypes` and implement `onReceiveShare()` in their SubApp class.
 
+### Global Search System
+
+**GlobalSearchService** (`lib/services/global_search_service.dart`): Provides unified search across all apps. Apps opt-in by implementing search methods in their SubApp class.
+
+**SearchResult** (`lib/core/search_result.dart`): Standard result format with type, title, subtitle, preview, and navigation data. Supported types: `file`, `note`, `vocabularyWord`, `chat`, `chatMessage`.
+
+**Making an App Searchable**:
+
+1. Override `supportsSearch` to return `true` in your SubApp
+2. Implement `search(String query)` to return `List<SearchResult>` matching the query
+3. Implement `navigateToSearchResult(BuildContext context, SearchResult result)` to handle navigation
+
+**Example Implementation**:
+
+```dart
+class NotesApp extends SubApp {
+  @override
+  bool get supportsSearch => true;
+
+  @override
+  Future<List<SearchResult>> search(String query) async {
+    final notes = await NotesStorage.instance.search(query);
+    return notes.map((note) {
+      String preview = note.content.replaceAll('\n', ' ').trim();
+      if (preview.length > 100) {
+        preview = '${preview.substring(0, 100)}...';
+      }
+
+      return SearchResult(
+        id: note.id,
+        type: SearchResultType.note,
+        appId: id,
+        title: note.title.isEmpty ? 'Untitled' : note.title,
+        subtitle: null,
+        preview: preview,
+        navigationData: {'noteId': note.id},
+        timestamp: note.updatedAt,
+      );
+    }).toList();
+  }
+
+  @override
+  void navigateToSearchResult(BuildContext context, SearchResult result) async {
+    final noteId = result.navigationData['noteId'] as String;
+    final note = await NotesStorage.instance.loadFullNote(noteId);
+    if (context.mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => NoteEditorScreen(note: note),
+        ),
+      );
+    }
+  }
+}
+```
+
+**Best Practices**:
+- Limit search results to 50 items for performance
+- Use SQL `LIKE '%query%'` for substring matching
+- Include timestamps for sorting by recency
+- Provide meaningful previews (first 100 chars of content)
+- Handle async navigation with `context.mounted` checks
+- Load full objects before navigation to avoid missing data errors
+
+**Reference Implementations**:
+- **Files**: `lib/apps/file_system/file_system_app.dart` - searches by filename
+- **Notes**: `lib/apps/notes/notes_app.dart` - searches title and content
+- **Vocabulary**: `lib/apps/vocabulary/vocabulary_app.dart` - searches word and meaning
+- **Chat**: `lib/apps/chat/chat_app.dart` - searches chat titles and message content
+
 ### Configuration System
 
 **ConfigService** (`lib/services/config_service.dart`): Two-layer configuration: user overrides (persistent) and defaults (in-memory). Sub-apps can define defaults in `onInit()` using `defineConfig()` and access values via `getConfig()`.

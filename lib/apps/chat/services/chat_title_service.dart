@@ -124,41 +124,61 @@ class ChatTitleService {
         ? '${conversationText.substring(0, 2000)}...'
         : conversationText;
 
-    final prompt = '''Based on the following conversation, generate a short, descriptive title (max 50 characters) that captures the main topic. Return ONLY the title, nothing else.
+    final systemPrompt = '''You are a chat title generator. Generate a short, descriptive title (max 50 characters) that captures the main topic of a conversation.
 
-Conversation:
-$truncatedText
+Use this EXACT format (no other text):
 
-Title:''';
+TITLE: <your title here>''';
+
+    final userPrompt = '''Generate a title for this conversation:
+
+$truncatedText''';
 
     final autocompletionService = AutocompletionService.instance;
     // Use content-only streaming to skip chain-of-thought reasoning
     final buffer = StringBuffer();
-    await for (final chunk
-        in autocompletionService.promptStreamContentOnly(prompt, maxTokens: 60)) {
+    await for (final chunk in autocompletionService.promptStreamContentOnly(
+      userPrompt,
+      systemPrompt: systemPrompt,
+      temperature: 0.3,
+    )) {
       buffer.write(chunk);
     }
     final response = buffer.toString();
     _logger.log('AI raw response: "$response"', severity: LogSeverity.debug);
 
-    // Clean up the response
-    var title = response.trim();
-    _logger.log('AI title after trim: "$title"', severity: LogSeverity.debug);
-    // Remove quotes if present
-    if (title.startsWith('"') && title.endsWith('"')) {
-      title = title.substring(1, title.length - 1);
-    }
-    if (title.startsWith("'") && title.endsWith("'")) {
-      title = title.substring(1, title.length - 1);
-    }
+    // Extract title using structured marker
+    final title = _extractTitle(response);
+    _logger.log('AI extracted title: "$title"', severity: LogSeverity.debug);
+
     // Truncate if too long
-    if (title.length > 50) {
-      title = '${title.substring(0, 47)}...';
+    var finalTitle = title;
+    if (finalTitle.length > 50) {
+      finalTitle = '${finalTitle.substring(0, 47)}...';
     }
 
-    final finalTitle = title.isEmpty ? 'New Chat' : title;
+    finalTitle = finalTitle.isEmpty ? 'New Chat' : finalTitle;
     _logger.log('AI final title: "$finalTitle"', severity: LogSeverity.debug);
     return finalTitle;
+  }
+
+  /// Extract title from structured response
+  String _extractTitle(String response) {
+    // Look for "TITLE: <title>" marker
+    final titleMatch = RegExp(
+      r'TITLE:\s*(.+?)(?:\n|$)',
+      multiLine: true,
+    ).firstMatch(response);
+
+    if (titleMatch != null) {
+      final title = titleMatch.group(1)?.trim() ?? '';
+      if (title.isNotEmpty) {
+        return title;
+      }
+    }
+
+    // Fallback: return trimmed response
+    return response.trim();
   }
 
   /// Fallback title generation when AI is not available

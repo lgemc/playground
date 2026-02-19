@@ -175,6 +175,14 @@ class QueueConfigs {
       maxRetries: 3,
       lockTimeoutSeconds: 600, // Long timeout for video transcription
     ),
+    // Queue for concept extraction from course content
+    QueueConfig(
+      id: 'concept-extraction',
+      name: 'Concept Extraction Processor',
+      eventPatterns: ['activity.extract_concepts', 'derivative.completed'],
+      maxRetries: 3,
+      lockTimeoutSeconds: 120, // AI concept extraction can take time
+    ),
     // Catch-all queue for unmatched events (disabled by default)
     QueueConfig(
       id: 'default-queue',

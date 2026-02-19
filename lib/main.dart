@@ -24,6 +24,7 @@ import 'apps/file_system/file_system_app.dart';
 import 'apps/file_system/services/file_system_storage.dart';
 import 'services/derivative_service.dart';
 import 'services/derivative_queue_consumer.dart';
+import 'services/concept_extraction_consumer.dart';
 import 'services/generators/summary_generator.dart';
 import 'services/generators/auto_title_generator.dart';
 import 'services/generators/transcript_generator.dart';
@@ -79,7 +80,7 @@ void main() async {
       try {
         await CrdtDatabase.instance.init(
           'crdt_test.db',
-          7, // Bumped version to 7 for transcript_segments table
+          9, // Bumped version to 9 for quiz tables
           (db, version) async {
             // Create a metadata table for CRDT
             await db.execute('''
@@ -240,6 +241,125 @@ void main() async {
                 marked_at INTEGER,
                 PRIMARY KEY (file_name, segment_start, segment_end)
               )
+            ''');
+
+            // Create reviewable_items table for concept extraction and spaced repetition
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS reviewable_items (
+                id TEXT PRIMARY KEY NOT NULL,
+                activity_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                module_id TEXT,
+                subsection_id TEXT,
+                type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                answer TEXT,
+                distractors TEXT,
+                metadata TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_reviewable_items_activity ON reviewable_items(activity_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_reviewable_items_course ON reviewable_items(course_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_reviewable_items_type ON reviewable_items(type)
+            ''');
+
+            // Create quizzes table
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quizzes (
+                id TEXT PRIMARY KEY NOT NULL,
+                course_id TEXT NOT NULL,
+                module_id TEXT,
+                subsection_id TEXT,
+                activity_id TEXT,
+                title TEXT NOT NULL,
+                description TEXT,
+                difficulty TEXT NOT NULL,
+                question_count INTEGER NOT NULL,
+                time_limit INTEGER,
+                shuffle_questions INTEGER NOT NULL DEFAULT 1,
+                shuffle_answers INTEGER NOT NULL DEFAULT 1,
+                passing_score INTEGER NOT NULL DEFAULT 70,
+                metadata TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quizzes_course ON quizzes(course_id)
+            ''');
+
+            // Create quiz_questions table (links quizzes to reviewable items)
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quiz_questions (
+                id TEXT PRIMARY KEY NOT NULL,
+                quiz_id TEXT NOT NULL,
+                reviewable_item_id TEXT NOT NULL,
+                order_index INTEGER NOT NULL,
+                points INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewable_item_id) REFERENCES reviewable_items(id) ON DELETE CASCADE
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz ON quiz_questions(quiz_id)
+            ''');
+
+            // Create quiz_attempts table (user attempts at quizzes)
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quiz_attempts (
+                id TEXT PRIMARY KEY NOT NULL,
+                quiz_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                completed_at INTEGER,
+                score INTEGER NOT NULL DEFAULT 0,
+                total_points INTEGER NOT NULL DEFAULT 0,
+                max_points INTEGER NOT NULL,
+                passed INTEGER NOT NULL DEFAULT 0,
+                metadata TEXT,
+                FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz ON quiz_attempts(quiz_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user ON quiz_attempts(user_id)
+            ''');
+
+            // Create quiz_answers table (user answers to questions)
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quiz_answers (
+                id TEXT PRIMARY KEY NOT NULL,
+                attempt_id TEXT NOT NULL,
+                quiz_question_id TEXT NOT NULL,
+                user_answer TEXT NOT NULL,
+                is_correct INTEGER NOT NULL,
+                points_earned INTEGER NOT NULL DEFAULT 0,
+                answered_at INTEGER NOT NULL,
+                metadata TEXT,
+                FOREIGN KEY (attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                FOREIGN KEY (quiz_question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quiz_answers_attempt ON quiz_answers(attempt_id)
             ''');
           },
           onUpgrade: (db, oldVersion, newVersion) async {
@@ -419,6 +539,134 @@ void main() async {
 
               print('[Migration] transcript_segments table created!');
             }
+
+            // Migration from version 7 to 8: Add reviewable_items table for concept extraction
+            if (oldVersion < 8) {
+              print('[Migration] Adding reviewable_items table...');
+
+              await db.execute('''
+                CREATE TABLE IF NOT EXISTS reviewable_items (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  activity_id TEXT NOT NULL,
+                  course_id TEXT NOT NULL,
+                  module_id TEXT,
+                  subsection_id TEXT,
+                  type TEXT NOT NULL,
+                  content TEXT NOT NULL,
+                  answer TEXT,
+                  distractors TEXT,
+                  metadata TEXT,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_reviewable_items_activity ON reviewable_items(activity_id)
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_reviewable_items_course ON reviewable_items(course_id)
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_reviewable_items_type ON reviewable_items(type)
+              ''');
+
+              print('[Migration] reviewable_items table created!');
+            }
+
+            // Migration from version 8 to 9: Add quiz tables
+            if (oldVersion < 9) {
+              print('[Migration] Adding quiz tables...');
+
+              await db.execute('''
+                CREATE TABLE IF NOT EXISTS quizzes (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  course_id TEXT NOT NULL,
+                  module_id TEXT,
+                  subsection_id TEXT,
+                  activity_id TEXT,
+                  title TEXT NOT NULL,
+                  description TEXT,
+                  difficulty TEXT NOT NULL,
+                  question_count INTEGER NOT NULL,
+                  time_limit INTEGER,
+                  shuffle_questions INTEGER NOT NULL DEFAULT 1,
+                  shuffle_answers INTEGER NOT NULL DEFAULT 1,
+                  passing_score INTEGER NOT NULL DEFAULT 70,
+                  metadata TEXT,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_quizzes_course ON quizzes(course_id)
+              ''');
+
+              await db.execute('''
+                CREATE TABLE IF NOT EXISTS quiz_questions (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  quiz_id TEXT NOT NULL,
+                  reviewable_item_id TEXT NOT NULL,
+                  order_index INTEGER NOT NULL,
+                  points INTEGER NOT NULL DEFAULT 1,
+                  created_at INTEGER NOT NULL,
+                  FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+                  FOREIGN KEY (reviewable_item_id) REFERENCES reviewable_items(id) ON DELETE CASCADE
+                )
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz ON quiz_questions(quiz_id)
+              ''');
+
+              await db.execute('''
+                CREATE TABLE IF NOT EXISTS quiz_attempts (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  quiz_id TEXT NOT NULL,
+                  user_id TEXT NOT NULL,
+                  started_at INTEGER NOT NULL,
+                  completed_at INTEGER,
+                  score INTEGER NOT NULL DEFAULT 0,
+                  total_points INTEGER NOT NULL DEFAULT 0,
+                  max_points INTEGER NOT NULL,
+                  passed INTEGER NOT NULL DEFAULT 0,
+                  metadata TEXT,
+                  FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
+                )
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz ON quiz_attempts(quiz_id)
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user ON quiz_attempts(user_id)
+              ''');
+
+              await db.execute('''
+                CREATE TABLE IF NOT EXISTS quiz_answers (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  attempt_id TEXT NOT NULL,
+                  quiz_question_id TEXT NOT NULL,
+                  user_answer TEXT NOT NULL,
+                  is_correct INTEGER NOT NULL,
+                  points_earned INTEGER NOT NULL DEFAULT 0,
+                  answered_at INTEGER NOT NULL,
+                  metadata TEXT,
+                  FOREIGN KEY (attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  FOREIGN KEY (quiz_question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE
+                )
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_quiz_answers_attempt ON quiz_answers(attempt_id)
+              ''');
+
+              print('[Migration] Quiz tables created!');
+            }
           },
         );
         print('✅ CRDT database initialized successfully!');
@@ -433,7 +681,7 @@ void main() async {
     try {
       await CrdtDatabase.instance.init(
         'crdt_main.db',
-        7, // Bumped version to 7 for transcript_segments table
+        9, // Bumped version to 9 for quiz tables
         (db, version) async {
           // Create a metadata table for CRDT
           await db.execute('''
@@ -594,6 +842,125 @@ void main() async {
               marked_at INTEGER,
               PRIMARY KEY (file_name, segment_start, segment_end)
             )
+          ''');
+
+          // Create reviewable_items table for concept extraction and spaced repetition
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS reviewable_items (
+              id TEXT PRIMARY KEY NOT NULL,
+              activity_id TEXT NOT NULL,
+              course_id TEXT NOT NULL,
+              module_id TEXT,
+              subsection_id TEXT,
+              type TEXT NOT NULL,
+              content TEXT NOT NULL,
+              answer TEXT,
+              distractors TEXT,
+              metadata TEXT,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+          ''');
+
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_reviewable_items_activity ON reviewable_items(activity_id)
+          ''');
+
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_reviewable_items_course ON reviewable_items(course_id)
+          ''');
+
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_reviewable_items_type ON reviewable_items(type)
+          ''');
+
+          // Create quizzes table
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS quizzes (
+              id TEXT PRIMARY KEY NOT NULL,
+              course_id TEXT NOT NULL,
+              module_id TEXT,
+              subsection_id TEXT,
+              activity_id TEXT,
+              title TEXT NOT NULL,
+              description TEXT,
+              difficulty TEXT NOT NULL,
+              question_count INTEGER NOT NULL,
+              time_limit INTEGER,
+              shuffle_questions INTEGER NOT NULL DEFAULT 1,
+              shuffle_answers INTEGER NOT NULL DEFAULT 1,
+              passing_score INTEGER NOT NULL DEFAULT 70,
+              metadata TEXT,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+          ''');
+
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_quizzes_course ON quizzes(course_id)
+          ''');
+
+          // Create quiz_questions table (links quizzes to reviewable items)
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_questions (
+              id TEXT PRIMARY KEY NOT NULL,
+              quiz_id TEXT NOT NULL,
+              reviewable_item_id TEXT NOT NULL,
+              order_index INTEGER NOT NULL,
+              points INTEGER NOT NULL DEFAULT 1,
+              created_at INTEGER NOT NULL,
+              FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+              FOREIGN KEY (reviewable_item_id) REFERENCES reviewable_items(id) ON DELETE CASCADE
+            )
+          ''');
+
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz ON quiz_questions(quiz_id)
+          ''');
+
+          // Create quiz_attempts table (user attempts at quizzes)
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_attempts (
+              id TEXT PRIMARY KEY NOT NULL,
+              quiz_id TEXT NOT NULL,
+              user_id TEXT NOT NULL,
+              started_at INTEGER NOT NULL,
+              completed_at INTEGER,
+              score INTEGER NOT NULL DEFAULT 0,
+              total_points INTEGER NOT NULL DEFAULT 0,
+              max_points INTEGER NOT NULL,
+              passed INTEGER NOT NULL DEFAULT 0,
+              metadata TEXT,
+              FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
+            )
+          ''');
+
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz ON quiz_attempts(quiz_id)
+          ''');
+
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user ON quiz_attempts(user_id)
+          ''');
+
+          // Create quiz_answers table (user answers to questions)
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_answers (
+              id TEXT PRIMARY KEY NOT NULL,
+              attempt_id TEXT NOT NULL,
+              quiz_question_id TEXT NOT NULL,
+              user_answer TEXT NOT NULL,
+              is_correct INTEGER NOT NULL,
+              points_earned INTEGER NOT NULL DEFAULT 0,
+              answered_at INTEGER NOT NULL,
+              metadata TEXT,
+              FOREIGN KEY (attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+              FOREIGN KEY (quiz_question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE
+            )
+          ''');
+
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_quiz_answers_attempt ON quiz_answers(attempt_id)
           ''');
         },
         onUpgrade: (db, oldVersion, newVersion) async{
@@ -773,6 +1140,134 @@ void main() async {
 
             print('[Migration] transcript_segments table created!');
           }
+
+          // Migration from version 7 to 8: Add reviewable_items table for concept extraction
+          if (oldVersion < 8) {
+            print('[Migration] Adding reviewable_items table...');
+
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS reviewable_items (
+                id TEXT PRIMARY KEY NOT NULL,
+                activity_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                module_id TEXT,
+                subsection_id TEXT,
+                type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                answer TEXT,
+                distractors TEXT,
+                metadata TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_reviewable_items_activity ON reviewable_items(activity_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_reviewable_items_course ON reviewable_items(course_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_reviewable_items_type ON reviewable_items(type)
+            ''');
+
+            print('[Migration] reviewable_items table created!');
+          }
+
+          // Migration from version 8 to 9: Add quiz tables
+          if (oldVersion < 9) {
+            print('[Migration] Adding quiz tables...');
+
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quizzes (
+                id TEXT PRIMARY KEY NOT NULL,
+                course_id TEXT NOT NULL,
+                module_id TEXT,
+                subsection_id TEXT,
+                activity_id TEXT,
+                title TEXT NOT NULL,
+                description TEXT,
+                difficulty TEXT NOT NULL,
+                question_count INTEGER NOT NULL,
+                time_limit INTEGER,
+                shuffle_questions INTEGER NOT NULL DEFAULT 1,
+                shuffle_answers INTEGER NOT NULL DEFAULT 1,
+                passing_score INTEGER NOT NULL DEFAULT 70,
+                metadata TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quizzes_course ON quizzes(course_id)
+            ''');
+
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quiz_questions (
+                id TEXT PRIMARY KEY NOT NULL,
+                quiz_id TEXT NOT NULL,
+                reviewable_item_id TEXT NOT NULL,
+                order_index INTEGER NOT NULL,
+                points INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewable_item_id) REFERENCES reviewable_items(id) ON DELETE CASCADE
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz ON quiz_questions(quiz_id)
+            ''');
+
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quiz_attempts (
+                id TEXT PRIMARY KEY NOT NULL,
+                quiz_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                completed_at INTEGER,
+                score INTEGER NOT NULL DEFAULT 0,
+                total_points INTEGER NOT NULL DEFAULT 0,
+                max_points INTEGER NOT NULL,
+                passed INTEGER NOT NULL DEFAULT 0,
+                metadata TEXT,
+                FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz ON quiz_attempts(quiz_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user ON quiz_attempts(user_id)
+            ''');
+
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quiz_answers (
+                id TEXT PRIMARY KEY NOT NULL,
+                attempt_id TEXT NOT NULL,
+                quiz_question_id TEXT NOT NULL,
+                user_answer TEXT NOT NULL,
+                is_correct INTEGER NOT NULL,
+                points_earned INTEGER NOT NULL DEFAULT 0,
+                answered_at INTEGER NOT NULL,
+                metadata TEXT,
+                FOREIGN KEY (attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                FOREIGN KEY (quiz_question_id) REFERENCES quiz_questions(id) ON DELETE CASCADE
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_quiz_answers_attempt ON quiz_answers(attempt_id)
+            ''');
+
+            print('[Migration] Quiz tables created!');
+          }
         },
       );
       print('🔧 [Mobile] CRDT database initialized: ${CrdtDatabase.instance.nodeId}');
@@ -802,9 +1297,13 @@ void _initDerivativeService() {
   DerivativeService.instance.registerGenerator(AutoTitleGenerator());
   DerivativeService.instance.registerGenerator(TranscriptGenerator());
 
-  // Start the consumer
-  final consumer = DerivativeQueueConsumer();
-  consumer.start();
+  // Start the derivative consumer
+  final derivativeConsumer = DerivativeQueueConsumer();
+  derivativeConsumer.start();
+
+  // Start the concept extraction consumer
+  final conceptConsumer = ConceptExtractionConsumer();
+  conceptConsumer.start();
 }
 
 void _registerApps() {
