@@ -310,6 +310,7 @@ class _QuizTakingScreenState extends State<QuizTakingScreen> {
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(16),
                 child: QuestionWidget(
+                  key: ValueKey(_currentQuestionIndex),
                   reviewableItem: reviewableItem,
                   userAnswer: currentAnswer,
                   onAnswerChanged: _onAnswerChanged,

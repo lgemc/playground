@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/file_item.dart';
 import '../models/derivative_artifact.dart';
 import '../services/file_system_storage.dart';
@@ -40,6 +41,7 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -51,6 +53,14 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
         _derivatives = derivatives.where((d) => !_deletedIds.contains(d.id)).toList();
         _isLoading = false;
       });
+
+      // Enable wakelock if any derivative is processing
+      final hasProcessing = _derivatives.any((d) => d.status == 'processing' || d.status == 'pending');
+      if (hasProcessing) {
+        WakelockPlus.enable();
+      } else {
+        WakelockPlus.disable();
+      }
     }
   }
 
@@ -61,6 +71,8 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
     );
 
     if (result == true) {
+      // Enable wakelock immediately when generation starts
+      WakelockPlus.enable();
       await _loadDerivatives();
     }
   }

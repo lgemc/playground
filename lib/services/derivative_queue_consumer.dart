@@ -1,5 +1,6 @@
-import '../apps/file_system/models/file_item.dart';
 import '../apps/file_system/services/file_system_storage.dart';
+import '../core/app_bus.dart';
+import '../core/app_event.dart';
 import 'derivative_service.dart';
 import 'logger.dart';
 import 'queue_consumer.dart';
@@ -101,6 +102,21 @@ class DerivativeQueueConsumer extends QueueConsumer {
       }
 
       print('[DerivativeConsumer] Generator found: ${generator.displayName}');
+
+      // Validate the generator supports this file type before running
+      if (!generator.canProcess(file)) {
+        final errorMsg =
+            'Generator "${generator.type}" does not support file type: ${file.mimeType ?? file.name}';
+        print('[DerivativeConsumer] ERROR: $errorMsg');
+        _logger.log(errorMsg, severity: LogSeverity.error);
+        await _storage.updateDerivative(
+          derivativeId,
+          status: 'failed',
+          errorMessage: errorMsg,
+        );
+        return false;
+      }
+
       print('[DerivativeConsumer] Starting generation...');
       // Generate the derivative content
       final content = await generator.generate(file);
@@ -111,6 +127,18 @@ class DerivativeQueueConsumer extends QueueConsumer {
 
       // Update status to completed
       await _storage.updateDerivative(derivativeId, status: 'completed');
+
+      // Emit derivative.completed event so consumers (e.g. concept extraction) can react
+      await AppBus.instance.emit(AppEvent.create(
+        type: 'derivative.completed',
+        appId: 'file_system',
+        metadata: {
+          'derivative_id': derivativeId,
+          'file_id': fileId,
+          'type': type,
+          'content': content,
+        },
+      ));
 
       _logger.log(
         'Derivative completed: $derivativeId',

@@ -213,7 +213,7 @@ class DeviceSyncService {
               final storage = FileSystemStorage.instance;
               await coordinator.handleBlobRequest(
                 message,
-                (hash) => storage.getBlobByHash(hash),
+                (hash) => storage.getAbsolutePathByHash(hash),
                 (hash) => storage.getRelativePathByHash(hash),
               );
               print('[Sync] Sent blobs to responder');
@@ -259,9 +259,9 @@ class DeviceSyncService {
 
       await coordinator.syncBlobs(
         () => storage.getMissingBlobHashes(),
-        (hash) => storage.getBlobByHash(hash),
+        (hash) => storage.getAbsolutePathByHash(hash),
         (hash) => storage.getRelativePathByHash(hash),
-        (hash, data, relativePath) => storage.storeBlobByHash(hash, data, relativePath),
+        (hash, tempFilePath, relativePath) => storage.storeBlobByPath(hash, tempFilePath, relativePath),
       );
     } catch (e) {
       print('[Sync] Blob sync error: $e');
@@ -349,9 +349,9 @@ class DeviceSyncService {
                 try {
                   await coordinator.syncBlobs(
                     () => storage.getMissingBlobHashes(),
-                    (hash) => storage.getBlobByHash(hash),
+                    (hash) => storage.getAbsolutePathByHash(hash),
                     (hash) => storage.getRelativePathByHash(hash),
-                    (hash, data, relativePath) => storage.storeBlobByHash(hash, data, relativePath),
+                    (hash, tempFilePath, relativePath) => storage.storeBlobByPath(hash, tempFilePath, relativePath),
                   );
                   print('[Sync] Responder blob sync completed successfully');
                 } catch (e) {
@@ -376,7 +376,7 @@ class DeviceSyncService {
             final storage = FileSystemStorage.instance;
             await coordinator.handleBlobRequest(
               message,
-              (hash) => storage.getBlobByHash(hash),
+              (hash) => storage.getAbsolutePathByHash(hash),
               (hash) => storage.getRelativePathByHash(hash),
             );
             print('[Sync] Blob request handled, ready for next sync...');

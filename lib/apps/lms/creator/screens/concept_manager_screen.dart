@@ -42,7 +42,7 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
     try {
       final rows = await CrdtDatabase.instance.query(
         '''SELECT * FROM reviewable_items
-           WHERE activity_id = ?
+           WHERE activity_id = ? AND is_deleted IS NOT 1
            ORDER BY created_at DESC''',
         [widget.activityId],
       );
@@ -185,8 +185,8 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
             ),
           ],
         ),
-        backgroundColor: Colors.deepPurple,
-        foregroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
         actions: [
           IconButton(
             icon: const Icon(Icons.list_alt),
@@ -293,23 +293,24 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
   }
 
   Widget _buildStatColumn(String label, String value, IconData icon) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Column(
       children: [
-        Icon(icon, size: 32, color: Colors.deepPurple),
+        Icon(icon, size: 32, color: colorScheme.primary),
         const SizedBox(height: 4),
         Text(
           value,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.bold,
-            color: Colors.deepPurple,
+            color: colorScheme.primary,
           ),
         ),
         Text(
           label,
           style: TextStyle(
             fontSize: 12,
-            color: Colors.grey[600],
+            color: colorScheme.onSurfaceVariant,
           ),
         ),
       ],
@@ -317,6 +318,7 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
   }
 
   Widget _buildConceptCard(ReviewableItem concept) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -329,15 +331,15 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
                 Chip(
                   label: Text(
                     _getTypeName(concept.type),
-                    style: const TextStyle(fontSize: 11),
+                    style: TextStyle(fontSize: 11, color: colorScheme.onSecondaryContainer),
                   ),
-                  backgroundColor: _getTypeColor(concept.type),
+                  backgroundColor: colorScheme.secondaryContainer,
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                 ),
                 const Spacer(),
                 IconButton(
                   icon: const Icon(Icons.delete, size: 20),
-                  color: Colors.red,
+                  color: colorScheme.error,
                   onPressed: () => _deleteConcept(concept),
                 ),
               ],
@@ -345,9 +347,10 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
             const SizedBox(height: 8),
             Text(
               concept.content,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
+                color: colorScheme.onSurface,
               ),
             ),
             if (concept.answer != null) ...[
@@ -355,7 +358,7 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.green.shade50,
+                  color: colorScheme.primaryContainer,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -365,12 +368,15 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
                       'Answer:',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: Colors.green.shade900,
+                        color: colorScheme.onPrimaryContainer,
                         fontSize: 12,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(concept.answer!),
+                    Text(
+                      concept.answer!,
+                      style: TextStyle(color: colorScheme.onPrimaryContainer),
+                    ),
                   ],
                 ),
               ),
@@ -381,14 +387,14 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
                 'Distractors:',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
-                  color: Colors.grey[700],
+                  color: colorScheme.onSurfaceVariant,
                   fontSize: 12,
                 ),
               ),
               const SizedBox(height: 4),
               ...concept.distractors.map((d) => Padding(
                     padding: const EdgeInsets.only(left: 8, top: 2),
-                    child: Text('• $d', style: TextStyle(color: Colors.grey[600])),
+                    child: Text('• $d', style: TextStyle(color: colorScheme.onSurfaceVariant)),
                   )),
             ],
           ],
@@ -416,24 +422,6 @@ class _ConceptManagerScreenState extends State<ConceptManagerScreen> {
     }
   }
 
-  Color _getTypeColor(ReviewableType type) {
-    switch (type) {
-      case ReviewableType.flashcard:
-        return Colors.blue.shade100;
-      case ReviewableType.multipleChoice:
-        return Colors.purple.shade100;
-      case ReviewableType.trueFalse:
-        return Colors.green.shade100;
-      case ReviewableType.shortAnswer:
-        return Colors.orange.shade100;
-      case ReviewableType.fillInBlank:
-        return Colors.pink.shade100;
-      case ReviewableType.procedure:
-        return Colors.teal.shade100;
-      case ReviewableType.summary:
-        return Colors.amber.shade100;
-    }
-  }
 }
 
 /// Dialog for configuring quiz generation options

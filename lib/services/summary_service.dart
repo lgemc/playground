@@ -12,7 +12,13 @@ class SummaryService {
   final _config = ConfigService.instance;
 
   static const String _systemPrompt = '''You are a helpful assistant that creates concise summaries of documents.
-Your summaries should:
+
+Use this EXACT format (no other text):
+
+SUMMARY:
+<your markdown-formatted summary here>
+
+The summary should:
 - Be clear and well-structured
 - Capture the main points and key ideas
 - Be formatted in markdown

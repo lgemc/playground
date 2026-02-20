@@ -3,7 +3,7 @@ import '../../shared/models/quiz.dart';
 import '../../../../services/quiz_generation_service.dart';
 import '../../../../services/quiz_service.dart';
 import 'quiz_taking_screen.dart';
-import 'quiz_results_screen.dart';
+import 'quiz_attempts_screen.dart';
 
 /// Screen showing all quizzes for a course
 class QuizListScreen extends StatefulWidget {
@@ -41,7 +41,9 @@ class _QuizListScreenState extends State<QuizListScreen> {
     setState(() => _loading = true);
 
     try {
+      print('[QuizListScreen] Loading quizzes for course: ${widget.courseId}');
       final quizzes = await _quizGenService.getQuizzesForCourse(widget.courseId);
+      print('[QuizListScreen] Found ${quizzes.length} quizzes');
 
       // Filter by module/subsection/activity if provided
       final filtered = quizzes.where((quiz) {
@@ -62,6 +64,8 @@ class _QuizListScreenState extends State<QuizListScreen> {
       for (final quiz in filtered) {
         stats[quiz.id] = await _quizService.getQuizStatistics(quiz.id);
       }
+
+      print('[QuizListScreen] After filtering: ${filtered.length} quizzes');
 
       setState(() {
         _quizzes = filtered;
@@ -128,27 +132,13 @@ class _QuizListScreenState extends State<QuizListScreen> {
     ).then((_) => _loadQuizzes()); // Refresh after quiz completion
   }
 
-  void _viewResults(Quiz quiz) async {
-    // Get latest attempt for this quiz
-    final attempts = await _quizService.getAttemptsForQuiz(quiz.id);
-    if (attempts.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No attempts yet')),
-        );
-      }
-      return;
-    }
-
-    if (mounted) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => QuizResultsScreen(
-            attemptId: attempts.first.id,
-          ),
-        ),
-      );
-    }
+  void _viewResults(Quiz quiz) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => QuizAttemptsScreen(quiz: quiz),
+      ),
+    );
   }
 
   @override

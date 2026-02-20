@@ -160,7 +160,40 @@ class _QuizResultsScreenState extends State<QuizResultsScreen> {
           const SizedBox(height: 16),
 
           // List of questions and answers
-          ..._details.asMap().entries.map((entry) {
+          if (_details.isEmpty)
+            Card(
+              color: Colors.orange.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.warning, color: Colors.orange.shade700),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Question Details Not Available',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.orange.shade900,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'This quiz may have been regenerated after you took it. '
+                      'The original questions are no longer available. '
+                      'Your score is still valid!',
+                      style: TextStyle(color: Colors.orange.shade900),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            ..._details.asMap().entries.map((entry) {
             final index = entry.key;
             final detail = entry.value;
             final answer = detail['answer'] as QuizAnswer;

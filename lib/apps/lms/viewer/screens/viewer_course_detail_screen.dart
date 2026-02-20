@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../shared/lms.dart';
+import '../../creator/widgets/learning_progress_card.dart';
+import '../../creator/screens/quiz_list_screen.dart';
 import 'viewer_module_detail_screen.dart';
 
 class ViewerCourseDetailScreen extends StatefulWidget {
@@ -43,6 +45,17 @@ class _ViewerCourseDetailScreenState extends State<ViewerCourseDetailScreen> {
     );
   }
 
+  void _navigateToQuizzes() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => QuizListScreen(
+          courseId: widget.courseId,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -70,9 +83,19 @@ class _ViewerCourseDetailScreenState extends State<ViewerCourseDetailScreen> {
         title: Text(_course!.name),
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.quiz),
+            tooltip: 'Quizzes',
+            onPressed: _navigateToQuizzes,
+          ),
+        ],
       ),
       body: Column(
         children: [
+          // Learning Progress Card - for spaced repetition
+          LearningProgressCard(courseId: widget.courseId),
+
           if (_course!.description != null)
             Container(
               width: double.infinity,

@@ -56,38 +56,59 @@ class _PlaygroundContainerState extends State<PlaygroundContainer> {
   }
 
   Widget _buildContent(BuildContext context, AppRuntimeManager runtimeManager, String? currentAppId) {
-    // If no app is running, show the launcher
-    if (currentAppId == null) {
+    final runningApps = runtimeManager.runningApps;
+
+    // If no apps have ever been launched, show the launcher directly.
+    if (runningApps.isEmpty) {
       return widget.launcher;
     }
 
-    final currentAppState = runtimeManager.getAppState(currentAppId);
-    if (currentAppState == null) {
-      return widget.launcher;
+    // Always keep all running apps in the widget tree via IndexedStack so that
+    // their internal Navigator state (e.g. course → module → activity) is
+    // preserved when the user returns to the launcher and comes back.
+    //
+    // The launcher lives at index 0. Running apps follow it at index 1+.
+    // When currentAppId is null we show the launcher (index 0); otherwise we
+    // show the matching app.
+
+    int activeIndex = 0; // default: launcher
+    if (currentAppId != null) {
+      final appIndex = runningApps.indexWhere((s) => s.appId == currentAppId);
+      if (appIndex >= 0) {
+        activeIndex = appIndex + 1; // +1 because launcher occupies index 0
+      }
     }
 
-    // Build the current app with its theme
-    final definition = AppRegistry.instance.getAppDefinition(currentAppId);
-    if (definition == null) {
-      return widget.launcher;
-    }
-
-    return Theme(
-      data: Theme.of(context).copyWith(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: definition.themeColor,
-          brightness: Theme.of(context).brightness,
+    final appWidgets = runningApps.map((appState) {
+      final definition = AppRegistry.instance.getAppDefinition(appState.appId);
+      final themeColor = definition?.themeColor ?? Colors.blue;
+      return Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: themeColor,
+            brightness: Theme.of(context).brightness,
+          ),
         ),
-      ),
-      child: _AppContainer(
-        key: ValueKey(currentAppId),
-        appState: currentAppState,
-      ),
+        child: _AppContainer(
+          key: ValueKey(appState.appId),
+          appState: appState,
+        ),
+      );
+    }).toList();
+
+    return IndexedStack(
+      index: activeIndex,
+      children: [
+        widget.launcher,
+        ...appWidgets,
+      ],
     );
   }
 }
 
-/// Container for a single app instance that preserves its state
+/// Container for a single app instance that preserves its state.
+/// Each app gets its own Navigator so that internal navigation (e.g.
+/// course → module → activity) survives app-switching.
 class _AppContainer extends StatefulWidget {
   final AppRuntimeState appState;
 
@@ -108,6 +129,14 @@ class _AppContainerState extends State<_AppContainer>
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required for AutomaticKeepAliveClientMixin
-    return widget.appState.instance.build(context);
+    // Wrap in a Navigator so each app has its own route stack.
+    // This preserves the navigation state (e.g. course → module → activity)
+    // when the user switches to another app and comes back.
+    return Navigator(
+      onGenerateRoute: (settings) => MaterialPageRoute(
+        builder: (context) => widget.appState.instance.build(context),
+        settings: settings,
+      ),
+    );
   }
 }

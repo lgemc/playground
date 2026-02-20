@@ -543,6 +543,9 @@ class AutocompletionService {
       ChatMessage(role: MessageRole.user, content: prompt),
     ];
 
+    bool hasYieldedContent = false;
+    final reasoningBuffer = StringBuffer();
+
     await for (final chunk in completeStreamStructured(
       messages,
       model: model,
@@ -550,14 +553,18 @@ class AutocompletionService {
       temperature: temperature,
       contentOnly: false,  // Get both reasoning and content
     )) {
-      // Yield content immediately if available (preferred)
       if (chunk.hasContent) {
+        hasYieldedContent = true;
         yield chunk.content!;
+      } else if (chunk.hasReasoning) {
+        // Buffer reasoning — only yield if no content is ever produced
+        reasoningBuffer.write(chunk.reasoningContent!);
       }
-      // Otherwise yield reasoning (for models that only send reasoning_content)
-      else if (chunk.hasReasoning) {
-        yield chunk.reasoningContent!;
-      }
+    }
+
+    // Only fall back to reasoning if the model never sent any content
+    if (!hasYieldedContent && reasoningBuffer.isNotEmpty) {
+      yield reasoningBuffer.toString();
     }
   }
 

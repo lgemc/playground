@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import '../models/sync_result.dart';
 import 'connection_service.dart';
@@ -263,26 +264,33 @@ class SyncProtocol {
     print('[Protocol] blobRequest sent');
   }
 
-  /// Send blob data in chunks
-  Future<void> sendBlob(String hash, String relativePath, List<int> data) async {
-    const chunkSize = 64 * 1024; // 64KB chunks
-    final totalChunks = (data.length / chunkSize).ceil();
+  /// Send blob data by streaming from disk in chunks (base64-encoded)
+  Future<void> sendBlobFromPath(String hash, String relativePath, String absolutePath) async {
+    const chunkSize = 256 * 1024; // 256KB chunks
+    final file = File(absolutePath);
+    final fileSize = await file.length();
+    final totalChunks = fileSize == 0 ? 1 : (fileSize / chunkSize).ceil();
 
-    for (var i = 0; i < totalChunks; i++) {
-      final start = i * chunkSize;
-      final end = (start + chunkSize < data.length) ? start + chunkSize : data.length;
-      final chunk = data.sublist(start, end);
+    final raf = await file.open(mode: FileMode.read);
+    try {
+      for (var i = 0; i < totalChunks; i++) {
+        final remaining = fileSize - (i * chunkSize);
+        final bytesToRead = remaining < chunkSize ? remaining.toInt() : chunkSize;
+        final chunk = bytesToRead > 0 ? await raf.read(bytesToRead) : Uint8List(0);
 
-      await send(SyncMessage(
-        type: SyncMessageType.blobData,
-        payload: {
-          'hash': hash,
-          'relativePath': relativePath,
-          'chunkIndex': i,
-          'totalChunks': totalChunks,
-          'data': chunk,
-        },
-      ));
+        await send(SyncMessage(
+          type: SyncMessageType.blobData,
+          payload: {
+            'hash': hash,
+            'relativePath': relativePath,
+            'chunkIndex': i,
+            'totalChunks': totalChunks,
+            'data': base64Encode(chunk), // base64 instead of List<int> (3-4x less overhead)
+          },
+        ));
+      }
+    } finally {
+      await raf.close();
     }
 
     // Send completion message
@@ -491,13 +499,31 @@ class SyncCoordinator {
     }
   }
 
-  /// Sync blobs after metadata sync
+  /// Sync blobs after metadata sync.
+  /// Chunks are written to temp files incrementally (no full file in RAM).
+  /// [storeBlob] receives the temp file path; caller must not delete it (syncBlobs cleans up).
   Future<void> syncBlobs(
     Future<List<String>> Function() getMissingHashes,
-    Future<List<int>?> Function(String hash) getBlobByHash,
+    Future<String?> Function(String hash) getAbsolutePathByHash,
     Future<String?> Function(String hash) getRelativePathByHash,
-    Future<void> Function(String hash, List<int> data, String relativePath) storeBlob,
+    Future<void> Function(String hash, String tempFilePath, String relativePath) storeBlob,
   ) async {
+    final blobSinks = <String, IOSink>{};
+    final blobTempPaths = <String, String>{};
+    final blobRelPaths = <String, String>{};
+
+    Future<void> cleanupTempFiles() async {
+      for (final sink in blobSinks.values) {
+        try { await sink.close(); } catch (_) {}
+      }
+      for (final path in blobTempPaths.values) {
+        try { await File(path).delete(); } catch (_) {}
+      }
+      blobSinks.clear();
+      blobTempPaths.clear();
+      blobRelPaths.clear();
+    }
+
     try {
       // Get list of hashes we need
       final neededHashes = await getMissingHashes();
@@ -510,15 +536,11 @@ class SyncCoordinator {
       print('[BlobSync] Requesting ${neededHashes.length} blobs');
       await _protocol.requestBlobs(neededHashes);
 
-      // Listen for incoming blobs
-      final blobBuffers = <String, List<List<int>>>{};
-      final blobMetadata = <String, Map<String, dynamic>>{};
       final receivedHashes = <String>{};
-
       final failedHashes = <String>{};
 
       await for (final message in _protocol.messages.timeout(
-        const Duration(seconds: 60),
+        const Duration(seconds: 120),
         onTimeout: (sink) {
           print('[BlobSync] ⚠️ Timeout! Received ${receivedHashes.length}/${neededHashes.length} blobs, ${failedHashes.length} failed');
           sink.close();
@@ -527,40 +549,40 @@ class SyncCoordinator {
         if (message.type == SyncMessageType.blobData) {
           final hash = message.payload['hash'] as String;
           final relativePath = message.payload['relativePath'] as String;
-          final chunkIndex = message.payload['chunkIndex'] as int;
-          final data = (message.payload['data'] as List).cast<int>();
+          final chunkData = base64Decode(message.payload['data'] as String);
 
-          blobBuffers.putIfAbsent(hash, () => []);
-          blobMetadata[hash] = {'relativePath': relativePath};
-
-          // Ensure we have space for this chunk
-          while (blobBuffers[hash]!.length <= chunkIndex) {
-            blobBuffers[hash]!.add([]);
+          // Open temp file on first chunk
+          if (!blobSinks.containsKey(hash)) {
+            final tempPath = '${Directory.systemTemp.path}/blob_${hash.substring(0, 16)}.tmp';
+            blobTempPaths[hash] = tempPath;
+            blobRelPaths[hash] = relativePath;
+            blobSinks[hash] = File(tempPath).openWrite();
           }
-          blobBuffers[hash]![chunkIndex] = data;
+
+          blobSinks[hash]!.add(chunkData);
 
         } else if (message.type == SyncMessageType.blobComplete) {
           final hash = message.payload['hash'] as String;
-          final relativePath = blobMetadata[hash]?['relativePath'] as String;
+          final relativePath = blobRelPaths[hash] ?? (message.payload['relativePath'] as String? ?? '');
+          final tempPath = blobTempPaths[hash];
 
-          // Assemble chunks
-          final completeBlob = <int>[];
-          for (final chunk in blobBuffers[hash]!) {
-            completeBlob.addAll(chunk);
+          if (tempPath != null) {
+            // Flush and close the sink before reading
+            await blobSinks[hash]?.flush();
+            await blobSinks[hash]?.close();
+            blobSinks.remove(hash);
+
+            try {
+              await storeBlob(hash, tempPath, relativePath);
+              print('[BlobSync] Received blob: $hash ($relativePath)');
+            } finally {
+              try { await File(tempPath).delete(); } catch (_) {}
+              blobTempPaths.remove(hash);
+              blobRelPaths.remove(hash);
+            }
           }
 
-          // Store blob
-          await storeBlob(hash, completeBlob, relativePath);
-          print('[BlobSync] Received blob: $hash ($relativePath)');
-
-          // Track received blobs
           receivedHashes.add(hash);
-
-          // Clean up
-          blobBuffers.remove(hash);
-          blobMetadata.remove(hash);
-
-          // Check if all blobs received
           print('[BlobSync] Progress: ${receivedHashes.length}/${neededHashes.length} blobs received');
           if (receivedHashes.length >= neededHashes.length) {
             print('[BlobSync] ✅ All blobs received!');
@@ -572,11 +594,8 @@ class SyncCoordinator {
             final hash = message.payload['hash'] as String;
             print('[BlobSync] ⚠️ Blob not available on remote: $hash');
             failedHashes.add(hash);
-
-            // Count this as "received" (even though it failed) so we don't wait forever
             receivedHashes.add(hash);
 
-            // Check if we're done
             print('[BlobSync] Progress: ${receivedHashes.length}/${neededHashes.length} (${failedHashes.length} unavailable)');
             if (receivedHashes.length >= neededHashes.length) {
               print('[BlobSync] ✅ Sync complete (some blobs unavailable)');
@@ -593,13 +612,15 @@ class SyncCoordinator {
       print('[BlobSync] Blob sync completed. Received ${receivedHashes.length} blobs');
     } catch (e) {
       print('[BlobSync] Error: $e');
+    } finally {
+      await cleanupTempFiles();
     }
   }
 
-  /// Handle blob requests (responder side)
+  /// Handle blob requests (responder side) — streams files from disk, no full file in RAM
   Future<void> handleBlobRequest(
     SyncMessage request,
-    Future<List<int>?> Function(String hash) getBlobByHash,
+    Future<String?> Function(String hash) getAbsolutePathByHash,
     Future<String?> Function(String hash) getRelativePathByHash,
   ) async {
     try {
@@ -613,17 +634,17 @@ class SyncCoordinator {
 
       for (final hash in hashes) {
         print('[BlobSync] Looking up blob: $hash');
-        final blob = await getBlobByHash(hash);
+        final absolutePath = await getAbsolutePathByHash(hash);
         final relativePath = await getRelativePathByHash(hash);
 
-        if (blob != null && relativePath != null) {
-          print('[BlobSync] Sending blob: $hash ($relativePath, ${blob.length} bytes)');
-          await _protocol.sendBlob(hash, relativePath, blob);
+        if (absolutePath != null && relativePath != null) {
+          final fileSize = await File(absolutePath).length();
+          print('[BlobSync] Sending blob: $hash ($relativePath, $fileSize bytes)');
+          await _protocol.sendBlobFromPath(hash, relativePath, absolutePath);
           print('[BlobSync] Blob sent: $hash');
           sentCount++;
         } else {
-          print('[BlobSync] ⚠️ Blob not found: $hash (blob=${blob != null}, path=${relativePath != null})');
-          // Send an error marker so the requester knows this blob is not available
+          print('[BlobSync] ⚠️ Blob not found: $hash');
           await _protocol.send(SyncMessage(
             type: SyncMessageType.error,
             payload: {

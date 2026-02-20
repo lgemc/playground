@@ -484,7 +484,7 @@ Generate a quiz title.''';
   /// Get all quizzes for a course
   Future<List<Quiz>> getQuizzesForCourse(String courseId) async {
     final results = await CrdtDatabase.instance.query(
-      'SELECT * FROM quizzes WHERE course_id = ? ORDER BY created_at DESC',
+      'SELECT * FROM quizzes WHERE course_id = ? AND deleted_at IS NULL ORDER BY created_at DESC',
       [courseId],
     );
 
@@ -494,7 +494,25 @@ Generate a quiz title.''';
   /// Get questions for a quiz with their reviewable items
   Future<List<Map<String, dynamic>>> getQuizQuestionsWithItems(String quizId) async {
     final results = await CrdtDatabase.instance.query('''
-      SELECT qq.*, ri.*
+      SELECT
+        qq.id as qq_id,
+        qq.quiz_id,
+        qq.reviewable_item_id,
+        qq.order_index,
+        qq.points,
+        qq.created_at as qq_created_at,
+        ri.id as ri_id,
+        ri.activity_id,
+        ri.course_id,
+        ri.module_id,
+        ri.subsection_id,
+        ri.type,
+        ri.content,
+        ri.answer,
+        ri.distractors,
+        ri.metadata,
+        ri.created_at as ri_created_at,
+        ri.updated_at
       FROM quiz_questions qq
       JOIN reviewable_items ri ON qq.reviewable_item_id = ri.id
       WHERE qq.quiz_id = ?
@@ -503,16 +521,16 @@ Generate a quiz title.''';
 
     return results.map((row) {
       final quizQuestion = QuizQuestion.fromDbRow({
-        'id': row['id'],
+        'id': row['qq_id'],
         'quiz_id': row['quiz_id'],
         'reviewable_item_id': row['reviewable_item_id'],
         'order_index': row['order_index'],
         'points': row['points'],
-        'created_at': row['created_at'],
+        'created_at': row['qq_created_at'],
       });
 
       final reviewableItem = ReviewableItem.fromDbRow({
-        'id': row['reviewable_item_id'],
+        'id': row['ri_id'],
         'activity_id': row['activity_id'],
         'course_id': row['course_id'],
         'module_id': row['module_id'],
@@ -522,7 +540,7 @@ Generate a quiz title.''';
         'answer': row['answer'],
         'distractors': row['distractors'],
         'metadata': row['metadata'],
-        'created_at': row['created_at'],
+        'created_at': row['ri_created_at'],
         'updated_at': row['updated_at'],
       });
 
@@ -533,9 +551,13 @@ Generate a quiz title.''';
     }).toList();
   }
 
-  /// Delete a quiz and all associated data
+  /// Delete a quiz (soft delete with deleted_at timestamp)
   Future<void> deleteQuiz(String quizId) async {
-    // Foreign keys will cascade delete quiz_questions, quiz_attempts, and quiz_answers
-    await CrdtDatabase.instance.execute('DELETE FROM quizzes WHERE id = ?', [quizId]);
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    await CrdtDatabase.instance.execute(
+      'UPDATE quizzes SET deleted_at = ? WHERE id = ?',
+      [now, quizId],
+    );
   }
 }

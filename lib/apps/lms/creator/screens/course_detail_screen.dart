@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../shared/lms.dart';
 import '../widgets/module_list_tile.dart';
+import '../widgets/learning_progress_card.dart';
 import 'module_form_screen.dart';
 import 'module_detail_screen.dart';
 
@@ -130,37 +131,47 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         backgroundColor: Colors.deepPurple,
         foregroundColor: Colors.white,
       ),
-      body: _course!.modules.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.folder, size: 64, color: Colors.grey[400]),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No modules yet',
-                    style: Theme.of(context).textTheme.titleLarge,
+      body: Column(
+        children: [
+          // Learning Progress Card
+          LearningProgressCard(courseId: widget.courseId),
+
+          // Modules list
+          Expanded(
+            child: _course!.modules.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.folder, size: 64, color: Colors.grey[400]),
+                        const SizedBox(height: 16),
+                        Text(
+                          'No modules yet',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 8),
+                        const Text('Tap + to create your first module'),
+                      ],
+                    ),
+                  )
+                : ReorderableListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _course!.modules.length,
+                    onReorder: _reorderModules,
+                    itemBuilder: (context, index) {
+                      final module = _course!.modules[index];
+                      return ModuleListTile(
+                        key: ValueKey(module.id),
+                        module: module,
+                        onTap: () => _navigateToModuleDetail(module),
+                        onEdit: () => _navigateToModuleForm(module),
+                        onDelete: () => _deleteModule(module),
+                      );
+                    },
                   ),
-                  const SizedBox(height: 8),
-                  const Text('Tap + to create your first module'),
-                ],
-              ),
-            )
-          : ReorderableListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: _course!.modules.length,
-              onReorder: _reorderModules,
-              itemBuilder: (context, index) {
-                final module = _course!.modules[index];
-                return ModuleListTile(
-                  key: ValueKey(module.id),
-                  module: module,
-                  onTap: () => _navigateToModuleDetail(module),
-                  onEdit: () => _navigateToModuleForm(module),
-                  onDelete: () => _deleteModule(module),
-                );
-              },
-            ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _navigateToModuleForm(),
         backgroundColor: Colors.deepPurple,

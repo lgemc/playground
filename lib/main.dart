@@ -80,7 +80,7 @@ void main() async {
       try {
         await CrdtDatabase.instance.init(
           'crdt_test.db',
-          9, // Bumped version to 9 for quiz tables
+          11, // Bumped version to 11 for quiz soft delete support
           (db, version) async {
             // Create a metadata table for CRDT
             await db.execute('''
@@ -360,6 +360,47 @@ void main() async {
 
             await db.execute('''
               CREATE INDEX IF NOT EXISTS idx_quiz_answers_attempt ON quiz_answers(attempt_id)
+            ''');
+
+            // Create review_schedules table for spaced repetition
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS review_schedules (
+                id TEXT PRIMARY KEY NOT NULL,
+                reviewable_item_id TEXT NOT NULL,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                repetitions INTEGER NOT NULL DEFAULT 0,
+                ease_factor REAL NOT NULL DEFAULT 2.5,
+                interval_days INTEGER NOT NULL DEFAULT 0,
+                next_review_date INTEGER NOT NULL,
+                correct_count INTEGER NOT NULL DEFAULT 0,
+                incorrect_count INTEGER NOT NULL DEFAULT 0,
+                retention_rate REAL NOT NULL DEFAULT 0.0,
+                last_reviewed INTEGER,
+                last_quality INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (reviewable_item_id) REFERENCES reviewable_items(id) ON DELETE CASCADE
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_schedule_item ON review_schedules(reviewable_item_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_schedule_user ON review_schedules(user_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_schedule_due ON review_schedules(next_review_date, user_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_schedule_last_reviewed ON review_schedules(last_reviewed)
+            ''');
+
+            await db.execute('''
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_user_item ON review_schedules(reviewable_item_id, user_id)
             ''');
           },
           onUpgrade: (db, oldVersion, newVersion) async {
@@ -667,6 +708,68 @@ void main() async {
 
               print('[Migration] Quiz tables created!');
             }
+
+            // Migration from version 9 to 10: Add review_schedules table for spaced repetition
+            if (oldVersion < 10) {
+              print('[Migration] Adding review_schedules table...');
+
+              await db.execute('''
+                CREATE TABLE IF NOT EXISTS review_schedules (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  reviewable_item_id TEXT NOT NULL,
+                  user_id TEXT NOT NULL DEFAULT 'default',
+                  repetitions INTEGER NOT NULL DEFAULT 0,
+                  ease_factor REAL NOT NULL DEFAULT 2.5,
+                  interval_days INTEGER NOT NULL DEFAULT 0,
+                  next_review_date INTEGER NOT NULL,
+                  correct_count INTEGER NOT NULL DEFAULT 0,
+                  incorrect_count INTEGER NOT NULL DEFAULT 0,
+                  retention_rate REAL NOT NULL DEFAULT 0.0,
+                  last_reviewed INTEGER,
+                  last_quality INTEGER,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  FOREIGN KEY (reviewable_item_id) REFERENCES reviewable_items(id) ON DELETE CASCADE
+                )
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_schedule_item ON review_schedules(reviewable_item_id)
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_schedule_user ON review_schedules(user_id)
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_schedule_due ON review_schedules(next_review_date, user_id)
+              ''');
+
+              await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_schedule_last_reviewed ON review_schedules(last_reviewed)
+              ''');
+
+              await db.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_user_item ON review_schedules(reviewable_item_id, user_id)
+              ''');
+
+              print('[Migration] review_schedules table created!');
+            }
+
+            // Migration from version 10 to 11: Add deleted_at to quiz tables
+            if (oldVersion < 11) {
+              print('[Migration] Adding deleted_at columns to quiz tables...');
+
+              await db.execute('ALTER TABLE quizzes ADD COLUMN deleted_at INTEGER');
+              await db.execute('ALTER TABLE quiz_questions ADD COLUMN deleted_at INTEGER');
+              await db.execute('ALTER TABLE quiz_attempts ADD COLUMN deleted_at INTEGER');
+              await db.execute('ALTER TABLE quiz_answers ADD COLUMN deleted_at INTEGER');
+
+              // Clean up any quizzes marked with __DELETED__ hack
+              await db.execute("UPDATE quizzes SET deleted_at = ?, title = 'Deleted Quiz' WHERE title = '__DELETED__'", [DateTime.now().millisecondsSinceEpoch]);
+
+              print('[Migration] Quiz soft delete columns added!');
+            }
           },
         );
         print('✅ CRDT database initialized successfully!');
@@ -681,7 +784,7 @@ void main() async {
     try {
       await CrdtDatabase.instance.init(
         'crdt_main.db',
-        9, // Bumped version to 9 for quiz tables
+        11, // Bumped version to 11 for quiz soft delete support
         (db, version) async {
           // Create a metadata table for CRDT
           await db.execute('''
@@ -1267,6 +1370,68 @@ void main() async {
             ''');
 
             print('[Migration] Quiz tables created!');
+          }
+
+          // Migration from version 9 to 10: Add review_schedules table for spaced repetition
+          if (oldVersion < 10) {
+            print('[Migration] Adding review_schedules table...');
+
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS review_schedules (
+                id TEXT PRIMARY KEY NOT NULL,
+                reviewable_item_id TEXT NOT NULL,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                repetitions INTEGER NOT NULL DEFAULT 0,
+                ease_factor REAL NOT NULL DEFAULT 2.5,
+                interval_days INTEGER NOT NULL DEFAULT 0,
+                next_review_date INTEGER NOT NULL,
+                correct_count INTEGER NOT NULL DEFAULT 0,
+                incorrect_count INTEGER NOT NULL DEFAULT 0,
+                retention_rate REAL NOT NULL DEFAULT 0.0,
+                last_reviewed INTEGER,
+                last_quality INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (reviewable_item_id) REFERENCES reviewable_items(id) ON DELETE CASCADE
+              )
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_schedule_item ON review_schedules(reviewable_item_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_schedule_user ON review_schedules(user_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_schedule_due ON review_schedules(next_review_date, user_id)
+            ''');
+
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_schedule_last_reviewed ON review_schedules(last_reviewed)
+            ''');
+
+            await db.execute('''
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_user_item ON review_schedules(reviewable_item_id, user_id)
+            ''');
+
+            print('[Migration] review_schedules table created!');
+          }
+
+          // Migration from version 10 to 11: Add deleted_at to quiz tables
+          if (oldVersion < 11) {
+            print('[Migration] Adding deleted_at columns to quiz tables...');
+
+            await db.execute('ALTER TABLE quizzes ADD COLUMN deleted_at INTEGER');
+            await db.execute('ALTER TABLE quiz_questions ADD COLUMN deleted_at INTEGER');
+            await db.execute('ALTER TABLE quiz_attempts ADD COLUMN deleted_at INTEGER');
+            await db.execute('ALTER TABLE quiz_answers ADD COLUMN deleted_at INTEGER');
+
+            // Clean up any quizzes marked with __DELETED__ hack
+            await db.execute("UPDATE quizzes SET deleted_at = ?, title = 'Deleted Quiz' WHERE title = '__DELETED__'", [DateTime.now().millisecondsSinceEpoch]);
+
+            print('[Migration] Quiz soft delete columns added!');
           }
         },
       );

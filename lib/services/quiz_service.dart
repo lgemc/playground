@@ -279,7 +279,7 @@ class QuizService {
   /// Get all attempts for a quiz
   Future<List<QuizAttempt>> getAttemptsForQuiz(String quizId) async {
     final results = await CrdtDatabase.instance.query(
-      'SELECT * FROM quiz_attempts WHERE quiz_id = ? ORDER BY started_at DESC',
+      'SELECT * FROM quiz_attempts WHERE quiz_id = ? AND deleted_at IS NULL ORDER BY started_at DESC',
       [quizId],
     );
 
@@ -346,6 +346,46 @@ class QuizService {
       ORDER BY qq.order_index ASC
     ''', [attemptId]);
 
+    print('[QuizService] getAttemptDetails: Found ${answersResult.length} answers for attempt $attemptId');
+    if (answersResult.isEmpty) {
+      print('[QuizService] WARNING: No answers found in JOIN query. Checking tables individually...');
+
+      // Debug: Check quiz_answers table
+      final qaDebug = await CrdtDatabase.instance.query(
+        'SELECT COUNT(*) as count FROM quiz_answers WHERE attempt_id = ?',
+        [attemptId],
+      );
+      print('[QuizService] quiz_answers count: ${qaDebug.first['count']}');
+
+      // Debug: Check quiz_questions table
+      final qqDebug = await CrdtDatabase.instance.query(
+        'SELECT COUNT(*) as count FROM quiz_questions WHERE quiz_id = ?',
+        [quiz.id],
+      );
+      print('[QuizService] quiz_questions count: ${qqDebug.first['count']}');
+
+      // Debug: Check reviewable_items table
+      final riDebug = await CrdtDatabase.instance.query(
+        'SELECT COUNT(*) as count FROM reviewable_items WHERE course_id = ?',
+        [quiz.courseId],
+      );
+      print('[QuizService] reviewable_items count: ${riDebug.first['count']}');
+
+      // Debug: Check if quiz_question_ids in quiz_answers match quiz_questions
+      final qaToQqCheck = await CrdtDatabase.instance.query('''
+        SELECT qa.id, qa.quiz_question_id,
+               CASE WHEN qq.id IS NULL THEN 'MISSING' ELSE 'EXISTS' END as status
+        FROM quiz_answers qa
+        LEFT JOIN quiz_questions qq ON qa.quiz_question_id = qq.id
+        WHERE qa.attempt_id = ?
+        LIMIT 3
+      ''', [attemptId]);
+      print('[QuizService] Sample quiz_answer → quiz_question links:');
+      for (final row in qaToQqCheck) {
+        print('  - QA: ${row['id']}, QQ_ID: ${row['quiz_question_id']}, Status: ${row['status']}');
+      }
+    }
+
     final details = answersResult.map((row) {
       return {
         'answer': QuizAnswer.fromDbRow({
@@ -374,6 +414,16 @@ class QuizService {
       'quiz': quiz,
       'details': details,
     };
+  }
+
+  /// Delete a quiz attempt (soft delete)
+  Future<void> deleteAttempt(String attemptId) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    await CrdtDatabase.instance.execute(
+      'UPDATE quiz_attempts SET deleted_at = ? WHERE id = ?',
+      [now, attemptId],
+    );
   }
 
   /// Calculate quiz statistics

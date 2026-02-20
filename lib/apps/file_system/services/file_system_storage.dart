@@ -583,7 +583,7 @@ class FileSystemStorage {
     final results = await CrdtDatabase.instance.query(
       '''
       SELECT * FROM derivatives
-      WHERE file_id = ?
+      WHERE file_id = ? AND is_deleted = 0
       ORDER BY created_at DESC
       ''',
       [fileId],
@@ -689,7 +689,7 @@ class FileSystemStorage {
 
   Future<bool> hasDerivatives(String fileId) async {
     final result = await CrdtDatabase.instance.query(
-      'SELECT COUNT(*) as count FROM derivatives WHERE file_id = ?',
+      'SELECT COUNT(*) as count FROM derivatives WHERE file_id = ? AND is_deleted = 0',
       [fileId],
     );
 
@@ -861,6 +861,16 @@ class FileSystemStorage {
     return file?.relativePath;
   }
 
+  /// Get absolute disk path for a blob by content hash (without loading data)
+  Future<String?> getAbsolutePathByHash(String hash) async {
+    final file = await getFileByHash(hash);
+    if (file == null) return null;
+    final absolutePath = p.join(storageDir.path, file.relativePath);
+    if (!File(absolutePath).existsSync()) return null;
+    print('[FileSystem] getAbsolutePathByHash($hash): Found at ${file.relativePath}');
+    return absolutePath;
+  }
+
   /// Get blob bytes by content hash
   Future<List<int>?> getBlobByHash(String hash) async {
     final file = await getFileByHash(hash);
@@ -937,6 +947,51 @@ class FileSystemStorage {
 
     // Clean up temp file
     await tempFile.delete();
+
+    print('[FileSystem] ✅ Blob stored and verified to ${results.length} location(s)');
+  }
+
+  /// Store blob from a temp file path (avoids loading full file into RAM)
+  Future<void> storeBlobByPath(String hash, String tempFilePath, String relativePath) async {
+    // Find ALL files with this hash (there might be duplicates)
+    final results = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM files
+      WHERE content_hash = ? AND deleted_at IS NULL
+      ''',
+      [hash],
+    );
+
+    print('[FileSystem] Storing blob for hash $hash to ${results.length} file(s)');
+
+    if (results.isEmpty) {
+      print('[FileSystem] ⚠️ No files found with hash $hash, skipping');
+      return;
+    }
+
+    // Verify hash of the assembled temp file
+    final tempFile = File(tempFilePath);
+    final actualHash = await _computeFileHash(tempFile);
+
+    if (actualHash != hash) {
+      throw Exception('Hash mismatch: expected $hash, got $actualHash');
+    }
+
+    // Store blob to ALL files with this hash
+    for (final fileMap in results) {
+      final fileItem = FileItem.fromMap(fileMap);
+      final filePath = p.join(storageDir.path, fileItem.relativePath);
+      final file = File(filePath);
+
+      final fileSize = await tempFile.length();
+      print('[FileSystem]   → Storing to: ${fileItem.relativePath} ($fileSize bytes)');
+
+      // Create parent directories
+      await file.parent.create(recursive: true);
+
+      // Copy the verified blob
+      await tempFile.copy(filePath);
+    }
 
     print('[FileSystem] ✅ Blob stored and verified to ${results.length} location(s)');
   }

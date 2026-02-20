@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../shared/lms.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../../../file_system/screens/pdf_reader_screen.dart';
+import '../../../video_viewer/screens/video_player_screen.dart';
 
 class ViewerSubSectionScreen extends StatefulWidget {
   final String courseId;
@@ -55,15 +57,58 @@ class _ViewerSubSectionScreenState extends State<ViewerSubSectionScreen> {
 
       try {
         final filePath = await FileSystemBridge.instance.getFilePathById(activity.fileId!);
-        if (filePath != null) {
-          final uri = Uri.file(filePath);
-          if (await canLaunchUrl(uri)) {
-            await launchUrl(uri);
-          } else {
-            throw 'Could not open file';
-          }
-        } else {
+        if (filePath == null) {
           throw 'File not found';
+        }
+
+        final physicalFile = File(filePath);
+        if (!physicalFile.existsSync()) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('File not downloaded yet'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+          return;
+        }
+
+        // Get file extension
+        final fileName = filePath.split('/').last;
+        final ext = fileName.contains('.')
+            ? fileName.split('.').last.toLowerCase()
+            : '';
+
+        if (!mounted) return;
+
+        // Open based on file type
+        if (ext == 'pdf') {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => PdfReaderScreen(
+                filePath: filePath,
+                fileName: fileName,
+              ),
+            ),
+          );
+        } else if (ext == 'mp4' || ext == 'mkv' || ext == 'avi' ||
+                   ext == 'mov' || ext == 'webm' || ext == 'flv' ||
+                   ext == 'm4v' || ext == '3gp') {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => VideoPlayerScreen(
+                filePath: filePath,
+                fileName: fileName,
+              ),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Cannot open .$ext files yet')),
+          );
         }
       } catch (e) {
         if (mounted) {

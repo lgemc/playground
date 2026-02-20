@@ -61,7 +61,7 @@ Output as JSON array:
           .promptStreamContentOnly(
             prompt,
             temperature: 0.3, // Lower temperature for consistency
-            maxTokens: 2000,
+            maxTokens: 4000,
           )
           .join();
 
@@ -117,7 +117,7 @@ Use the same format as:
           .promptStreamContentOnly(
             prompt,
             temperature: 0.3,
-            maxTokens: 2000,
+            maxTokens: 4000,
           )
           .join();
 
@@ -134,7 +134,9 @@ Use the same format as:
     }
   }
 
-  /// Parse LLM JSON response to ReviewableItem list
+  /// Parse LLM JSON response to ReviewableItem list.
+  /// If the response is truncated (e.g. due to token limit), salvages all
+  /// complete items that appeared before the cut-off.
   List<ReviewableItem> _parseJsonToReviewableItems(
     String jsonResponse, {
     required String activityId,
@@ -142,18 +144,34 @@ Use the same format as:
     String? moduleId,
     String? subSectionId,
   }) {
-    try {
-      // Clean JSON (remove markdown code blocks if present)
-      final cleanJson = jsonResponse
-          .replaceAll(RegExp(r'```json\s*'), '')
-          .replaceAll(RegExp(r'```\s*$'), '')
-          .trim();
+    // Clean JSON (remove markdown code blocks if present)
+    var cleanJson = jsonResponse
+        .replaceAll(RegExp(r'```json\s*'), '')
+        .replaceAll(RegExp(r'```\s*$'), '')
+        .trim();
 
-      final List<dynamic> jsonList = json.decode(cleanJson);
+    // Try parsing as-is first
+    List<dynamic>? jsonList = _tryDecodeJsonArray(cleanJson);
 
-      return jsonList.map((item) {
+    // If that failed, the response is likely truncated — repair it by
+    // finding the last complete object and closing the array.
+    if (jsonList == null) {
+      print('JSON parsing failed on raw response, attempting truncation repair...');
+      cleanJson = _repairTruncatedJsonArray(cleanJson);
+      jsonList = _tryDecodeJsonArray(cleanJson);
+    }
+
+    if (jsonList == null) {
+      print('JSON parsing failed even after repair.');
+      print('Response was: $jsonResponse');
+      return [];
+    }
+
+    final items = <ReviewableItem>[];
+    for (final item in jsonList) {
+      try {
         final type = _parseReviewableType(item['type'] as String);
-        return ReviewableItem.create(
+        items.add(ReviewableItem.create(
           activityId: activityId,
           courseId: courseId,
           moduleId: moduleId,
@@ -164,13 +182,54 @@ Use the same format as:
           distractors: (item['distractors'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList(),
-        );
-      }).toList();
-    } catch (e) {
-      print('JSON parsing failed: $e');
-      print('Response was: $jsonResponse');
-      return [];
+        ));
+      } catch (e) {
+        print('Skipping malformed concept item: $e');
+      }
     }
+    return items;
+  }
+
+  /// Attempt to decode a JSON array; returns null on failure.
+  List<dynamic>? _tryDecodeJsonArray(String text) {
+    try {
+      final decoded = json.decode(text);
+      if (decoded is List) return decoded;
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Repair a truncated JSON array by finding the last complete `}` that
+  /// closes a top-level object, then closing the array after it.
+  String _repairTruncatedJsonArray(String text) {
+    // Find the start of the array
+    final arrayStart = text.indexOf('[');
+    if (arrayStart < 0) return '[]';
+
+    // Walk backwards from the end to find the last `}` that closes a
+    // top-level object in the array (depth == 1 inside the array).
+    int depth = 0;
+    int lastCompleteObjectEnd = -1;
+
+    for (int i = arrayStart; i < text.length; i++) {
+      final ch = text[i];
+      if (ch == '{' || ch == '[') {
+        depth++;
+      } else if (ch == '}' || ch == ']') {
+        depth--;
+        // A closing `}` at depth 1 means we just closed a top-level object
+        if (ch == '}' && depth == 1) {
+          lastCompleteObjectEnd = i;
+        }
+      }
+    }
+
+    if (lastCompleteObjectEnd < 0) return '[]';
+
+    // Everything up to and including the last complete object, then close array
+    return '${text.substring(arrayStart, lastCompleteObjectEnd + 1)}]';
   }
 
   ReviewableType _parseReviewableType(String typeString) {

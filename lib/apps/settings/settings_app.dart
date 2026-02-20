@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/sub_app.dart';
 import '../../core/app_registry.dart';
 import '../../services/config_service.dart';
+import 'screens/database_migration_screen.dart';
 
 /// Settings app for viewing and modifying configurations
 class SettingsApp extends SubApp {
@@ -142,6 +143,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _selectedScope = 'global';
               _selectedAppId = null;
             });
+          },
+        ),
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.upload),
+          title: const Text('Database Migration'),
+          subtitle: const Text('Add spaced repetition'),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const DatabaseMigrationScreen(),
+              ),
+            );
           },
         ),
         const Divider(),
