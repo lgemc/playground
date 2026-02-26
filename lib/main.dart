@@ -32,6 +32,7 @@ import 'services/whisper_service.dart';
 import 'core/app_bus.dart';
 import 'apps/lms/creator/lms_creator_app.dart';
 import 'apps/lms/viewer/lms_viewer_app.dart';
+import 'apps/assistant/assistant_app.dart';
 import 'core/sync/services/device_sync_service.dart';
 import 'core/sync/services/device_id_service.dart';
 import 'core/sync/database/sync_database.dart';
@@ -1477,6 +1478,7 @@ void _registerApps() {
   // Register apps
   registry.register(SearchApp());
   registry.register(SettingsApp());
+  registry.register(AssistantApp());
   registry.register(NotesApp());
   registry.register(VocabularyApp());
   registry.register(ChatApp());

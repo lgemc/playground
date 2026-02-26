@@ -11,6 +11,8 @@ import 'favorites_screen.dart';
 import 'search_screen.dart';
 import 'pdf_reader_screen.dart';
 import 'file_derivatives_screen.dart';
+import 'markdown_editor_screen.dart';
+import 'markdown_file_editor_screen.dart';
 import '../../video_viewer/screens/video_player_screen.dart';
 import '../widgets/folder_picker_dialog.dart';
 import '../../../services/share_service.dart';
@@ -160,6 +162,19 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         nameController.text,
         _currentPath,
       );
+      _loadContents();
+    }
+  }
+
+  Future<void> _createMarkdownFile() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MarkdownEditorScreen(folderPath: _currentPath),
+      ),
+    );
+
+    if (result == true) {
       _loadContents();
     }
   }
@@ -503,8 +518,16 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
 
     final ext = file.extension.toLowerCase();
 
-    // Check if it's a PDF file
-    if (ext == 'pdf') {
+    // Check if it's a markdown file
+    if (ext == 'md') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MarkdownFileEditorScreen(file: file),
+        ),
+      ).then((_) => _loadContents());
+    } else if (ext == 'pdf') {
+      // PDF files
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -580,6 +603,14 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
             onTap: () {
               Navigator.pop(context);
               _createFolder();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.description),
+            title: const Text('New Markdown File'),
+            onTap: () {
+              Navigator.pop(context);
+              _createMarkdownFile();
             },
           ),
           ListTile(
