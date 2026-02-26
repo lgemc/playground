@@ -10,18 +10,66 @@ class AssistantChatScreen extends StatefulWidget {
   State<AssistantChatScreen> createState() => _AssistantChatScreenState();
 }
 
-class _AssistantChatScreenState extends State<AssistantChatScreen> {
+class _AssistantChatScreenState extends State<AssistantChatScreen> with WidgetsBindingObserver {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<AssistantMessage> _messages = [];
   bool _isLoading = false;
   bool _isInitialized = false;
   String? _error;
+  String? _currentAction;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeAgent();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Refresh messages when returning to this screen
+    _refreshMessages();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    // Reload messages when app comes back to foreground
+    if (state == AppLifecycleState.resumed) {
+      _refreshMessages();
+    }
+  }
+
+  void _refreshMessages() {
+    if (!_isInitialized) return;
+
+    final messages = OrchestratorAgentService.instance.getMessages();
+
+    // Check if messages differ (by length or content of last message)
+    bool needsUpdate = messages.length != _messages.length;
+
+    if (!needsUpdate && messages.isNotEmpty && _messages.isNotEmpty) {
+      final lastMessage = messages.last;
+      final localLastMessage = _messages.last;
+      // Check if last message content has changed (streaming update)
+      needsUpdate = lastMessage.content != localLastMessage.content;
+    }
+
+    if (mounted && needsUpdate) {
+      setState(() {
+        _messages.clear();
+        _messages.addAll(messages);
+        // Check if last message is from assistant and is complete
+        final lastMessage = messages.isNotEmpty ? messages.last : null;
+        if (lastMessage != null && !lastMessage.isUser && lastMessage.content.isNotEmpty) {
+          _isLoading = false;
+        }
+      });
+      _scrollToBottom();
+    }
   }
 
   Future<void> _initializeAgent() async {
@@ -63,10 +111,12 @@ class _AssistantChatScreenState extends State<AssistantChatScreen> {
       isUser: true,
     );
 
-    setState(() {
-      _messages.add(userMessage);
-      _isLoading = true;
-    });
+    if (mounted) {
+      setState(() {
+        _messages.add(userMessage);
+        _isLoading = true;
+      });
+    }
 
     _messageController.clear();
     _scrollToBottom();
@@ -78,44 +128,75 @@ class _AssistantChatScreenState extends State<AssistantChatScreen> {
       isUser: false,
     );
 
-    setState(() {
-      _messages.add(aiMessage);
-    });
+    if (mounted) {
+      setState(() {
+        _messages.add(aiMessage);
+      });
+    }
 
     _scrollToBottom();
 
     try {
       final buffer = StringBuffer();
+      bool hasReceivedContent = false;
 
-      // Stream the response
-      await for (final chunk in OrchestratorAgentService.instance.chatStream(text)) {
-        buffer.write(chunk);
+      // Stream the response - continue even if widget is disposed
+      await for (final event in OrchestratorAgentService.instance.chatStreamEvents(text)) {
+        if (event is ContentEvent) {
+          buffer.write(event.content);
+          hasReceivedContent = true;
 
-        // Update the AI message with streamed content
+          // Only update UI if widget is still mounted
+          if (mounted) {
+            setState(() {
+              _currentAction = null; // Clear action status when content arrives
+              _messages[_messages.length - 1] = AssistantMessage(
+                content: buffer.toString(),
+                timestamp: aiMessage.timestamp,
+                isUser: false,
+              );
+            });
+
+            _scrollToBottom();
+          }
+        } else if (event is ToolCallStartEvent) {
+          // Update current action
+          if (mounted) {
+            setState(() {
+              _currentAction = event.friendlyName;
+            });
+          }
+        }
+      }
+
+      // Ensure we always have a response, even if empty after tool calls
+      if (mounted) {
+        setState(() {
+          if (!hasReceivedContent && buffer.isEmpty) {
+            // If no content was generated after tools, show a generic message
+            _messages[_messages.length - 1] = AssistantMessage(
+              content: 'Done.',
+              timestamp: aiMessage.timestamp,
+              isUser: false,
+            );
+          }
+          _isLoading = false;
+          _currentAction = null;
+        });
+      }
+    } catch (e) {
+      // Update AI message with error
+      if (mounted) {
         setState(() {
           _messages[_messages.length - 1] = AssistantMessage(
-            content: buffer.toString(),
+            content: 'Error: $e',
             timestamp: aiMessage.timestamp,
             isUser: false,
           );
+          _isLoading = false;
+          _currentAction = null;
         });
-
-        _scrollToBottom();
       }
-
-      setState(() {
-        _isLoading = false;
-      });
-    } catch (e) {
-      // Update AI message with error
-      setState(() {
-        _messages[_messages.length - 1] = AssistantMessage(
-          content: 'Error: $e',
-          timestamp: aiMessage.timestamp,
-          isUser: false,
-        );
-        _isLoading = false;
-      });
     }
   }
 
@@ -160,6 +241,7 @@ class _AssistantChatScreenState extends State<AssistantChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -299,7 +381,7 @@ class _AssistantChatScreenState extends State<AssistantChatScreen> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'Thinking...',
+                    _currentAction ?? 'Thinking...',
                     style: TextStyle(
                       color: AssistantTheme.aiBubbleText,
                       fontSize: 15,
@@ -388,33 +470,35 @@ class _MessageBubble extends StatelessWidget {
             const SizedBox(width: 8),
           ],
           Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: isUser ? AssistantTheme.userBubble : AssistantTheme.aiBubble,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  MarkdownBody(
-                    data: content,
-                    shrinkWrap: true,
-                    styleSheet: isUser
-                        ? AssistantTheme.userMarkdownStyle
-                        : AssistantTheme.aiMarkdownStyle,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatTime(timestamp),
-                    style: TextStyle(
-                      color: isUser
-                          ? AssistantTheme.userBubbleText.withValues(alpha: 0.7)
-                          : AssistantTheme.aiBubbleText.withValues(alpha: 0.6),
-                      fontSize: 11,
+            child: SelectionArea(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  color: isUser ? AssistantTheme.userBubble : AssistantTheme.aiBubble,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    MarkdownBody(
+                      data: content,
+                      shrinkWrap: true,
+                      styleSheet: isUser
+                          ? AssistantTheme.userMarkdownStyle
+                          : AssistantTheme.aiMarkdownStyle,
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      _formatTime(timestamp),
+                      style: TextStyle(
+                        color: isUser
+                            ? AssistantTheme.userBubbleText.withValues(alpha: 0.7)
+                            : AssistantTheme.aiBubbleText.withValues(alpha: 0.6),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

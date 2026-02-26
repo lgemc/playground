@@ -21,6 +21,44 @@ class AssistantMessage {
   });
 }
 
+/// Events that can be streamed from the agent
+abstract class AgentEvent {}
+
+class ContentEvent extends AgentEvent {
+  final String content;
+  ContentEvent(this.content);
+}
+
+class ToolCallStartEvent extends AgentEvent {
+  final String toolName;
+  final Map<String, dynamic> arguments;
+
+  ToolCallStartEvent(this.toolName, this.arguments);
+
+  String get friendlyName {
+    switch (toolName) {
+      case 'list_courses':
+        return '📚 Listing courses';
+      case 'get_course':
+        return '📖 Getting course details';
+      case 'create_course':
+        return '✨ Creating course';
+      case 'create_module':
+        return '📝 Creating module';
+      case 'create_subsection':
+        return '📄 Creating subsection';
+      case 'create_activity':
+        return '🎯 Creating activity';
+      case 'list_folders':
+        return '📁 Listing folders';
+      case 'list_files':
+        return '📂 Listing files';
+      default:
+        return '🔧 $toolName';
+    }
+  }
+}
+
 /// Orchestrator service using direct tool calling
 class OrchestratorAgentService {
   static OrchestratorAgentService? _instance;
@@ -46,6 +84,7 @@ CRITICAL INSTRUCTIONS:
 - NEVER just repeat the tool's "message" field
 - ALWAYS show the specific items from the "data" field
 - When creating course structures, remember to use the IDs returned from previous creations
+- ALWAYS provide a final response after using tools - NEVER end without responding to the user
 
 Example: When list_courses returns:
 {
@@ -58,11 +97,12 @@ Example: When list_courses returns:
   }
 }
 
-You MUST respond: "There are 2 courses available:
+You MUST respond with actual content: "There are 2 courses available:
 1. **Introduction to Python** - Learn Python basics
 2. **Web Development** - Build modern web apps"
 
 DO NOT respond: "Found 2 courses"
+DO NOT end without providing a readable response to the user.
 
 Always format the actual data from tool results in a clear, readable way.''';
 
@@ -599,8 +639,8 @@ Always format the actual data from tool results in a clear, readable way.''';
     );
   }
 
-  /// Send a message and get a streaming response
-  Stream<String> chatStream(String message) async* {
+  /// Send a message and get a streaming response with events
+  Stream<AgentEvent> chatStreamEvents(String message) async* {
     if (!_isInitialized) {
       await initialize();
     }
@@ -628,7 +668,7 @@ Always format the actual data from tool results in a clear, readable way.''';
       )) {
         if (event is ContentChunk) {
           buffer.write(event.content);
-          yield event.content; // Stream the chunk to UI
+          yield ContentEvent(event.content); // Stream the chunk to UI
         } else if (event is ToolCallEvent) {
           toolCalls.add(event);
         }
@@ -636,17 +676,35 @@ Always format the actual data from tool results in a clear, readable way.''';
 
       // If no tool calls, we're done
       if (toolCalls.isEmpty) {
-        final response = buffer.toString();
-        _messages.add(AssistantMessage(
-          content: response,
-          timestamp: DateTime.now(),
-          isUser: false,
-        ));
+        final response = buffer.toString().trim();
+
+        // Safety check: if response looks like raw JSON, it's likely an error
+        if (response.isEmpty) {
+          // No response generated - this might happen with some models
+          // The UI will handle this with a fallback message
+        } else if (response.startsWith('{') || response.startsWith('[')) {
+          // Looks like raw JSON - this shouldn't happen with a proper prompt
+          // But let's handle it gracefully
+          _messages.add(AssistantMessage(
+            content: 'Action completed.',
+            timestamp: DateTime.now(),
+            isUser: false,
+          ));
+        } else {
+          _messages.add(AssistantMessage(
+            content: response,
+            timestamp: DateTime.now(),
+            isUser: false,
+          ));
+        }
         return;
       }
 
       // Execute tool calls
       for (final toolCall in toolCalls) {
+        // Notify UI about tool call
+        yield ToolCallStartEvent(toolCall.name, toolCall.arguments);
+
         final result = await _executeTool(toolCall.name, toolCall.arguments);
 
         // Add tool call to history
@@ -671,6 +729,15 @@ Always format the actual data from tool results in a clear, readable way.''';
       }
 
       buffer.clear();
+    }
+  }
+
+  /// Send a message and get a streaming response (backward compatible)
+  Stream<String> chatStream(String message) async* {
+    await for (final event in chatStreamEvents(message)) {
+      if (event is ContentEvent) {
+        yield event.content;
+      }
     }
   }
 
