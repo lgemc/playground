@@ -129,6 +129,8 @@ class DerivativeQueueConsumer extends QueueConsumer {
       await _storage.updateDerivative(derivativeId, status: 'completed');
 
       // Emit derivative.completed event so consumers (e.g. concept extraction) can react
+      // NOTE: Don't include content in metadata - it can exceed SQLite CursorWindow limit (2MB)
+      // Consumers should fetch content from storage using derivative_id
       await AppBus.instance.emit(AppEvent.create(
         type: 'derivative.completed',
         appId: 'file_system',
@@ -136,7 +138,6 @@ class DerivativeQueueConsumer extends QueueConsumer {
           'derivative_id': derivativeId,
           'file_id': fileId,
           'type': type,
-          'content': content,
         },
       ));
 

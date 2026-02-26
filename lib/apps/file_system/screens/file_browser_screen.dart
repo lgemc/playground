@@ -17,6 +17,8 @@ import '../../../services/share_service.dart';
 import '../../../services/share_content.dart';
 import '../../../services/shared_files_service.dart';
 import '../../../services/generators/auto_title_generator.dart';
+import '../../../services/derivative_service.dart';
+import '../../../core/database/crdt_database.dart';
 
 class FileBrowserScreen extends StatefulWidget {
   final String? initialPath;
@@ -602,6 +604,274 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     );
   }
 
+  Future<void> _queueVideosForTranscription() async {
+    if (!mounted) return;
+
+    // Show initial snackbar
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Scanning videos in background...')),
+    );
+
+    // Run scanning in background
+    try {
+      // Get video files (MP4 only) in current folder
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM files
+        WHERE deleted_at IS NULL AND folder_path = ?
+        ORDER BY name COLLATE NOCASE
+        ''',
+        [_currentPath],
+      );
+      final allFiles = results.map((m) => FileItem.fromMap(m)).toList();
+
+      final videoFiles = allFiles.where((file) {
+        final ext = file.extension.toLowerCase();
+        return ext == 'mp4';
+      }).toList();
+
+      // Check which videos don't have completed transcripts
+      // Use direct SQL query to avoid loading all derivative objects into memory
+      final videosNeedingTranscripts = <FileItem>[];
+
+      for (final file in videoFiles) {
+        final hasCompleted = await CrdtDatabase.instance.query(
+          '''
+          SELECT COUNT(*) as count FROM derivatives
+          WHERE file_id = ? AND type = 'transcript' AND status = 'completed'
+          ''',
+          [file.id],
+        );
+
+        final count = hasCompleted.first['count'] as int;
+        final hasCompletedTranscript = count > 0;
+
+        print('[QueueTranscripts] File: ${file.name}, hasCompleted: $hasCompletedTranscript');
+        if (!hasCompletedTranscript) {
+          videosNeedingTranscripts.add(file);
+        }
+      }
+
+      print('[QueueTranscripts] Total videos: ${videoFiles.length}, needing transcripts: ${videosNeedingTranscripts.length}');
+
+      if (!mounted) return;
+
+      if (videosNeedingTranscripts.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(videoFiles.isEmpty
+                ? 'No video files found'
+                : 'All videos already have transcripts'),
+          ),
+        );
+        return;
+      }
+
+      // Show confirmation dialog
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Queue Videos for Transcription'),
+          content: Text(
+            'Found ${videosNeedingTranscripts.length} video(s) without transcripts.\n\n'
+            'Queue all for transcription?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Queue All'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      // Queue videos one by one with delays to avoid OOM
+      var queued = 0;
+
+      for (final file in videosNeedingTranscripts) {
+        await DerivativeService.instance.generateDerivative(file.id, 'transcript');
+        queued++;
+
+        // Small delay between each video to prevent memory pressure
+        if (queued < videosNeedingTranscripts.length) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Queued $queued video(s) for transcription',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error scanning videos: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _queueFilesForSummary() async {
+    if (!mounted) return;
+
+    // Show initial snackbar
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Scanning files in background...')),
+    );
+
+    // Run scanning in background
+    try {
+      // Get all files in current folder
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM files
+        WHERE deleted_at IS NULL AND folder_path = ?
+        ORDER BY name COLLATE NOCASE
+        ''',
+        [_currentPath],
+      );
+      final allFiles = results.map((m) => FileItem.fromMap(m)).toList();
+
+      // Find videos with completed transcripts but no summary
+      final videoFiles = allFiles.where((file) {
+        final ext = file.extension.toLowerCase();
+        return ext == 'mp4';
+      }).toList();
+
+      // Find PDFs
+      final pdfFiles = allFiles.where((file) {
+        final ext = file.extension.toLowerCase();
+        return ext == 'pdf';
+      }).toList();
+
+      final filesNeedingSummary = <FileItem>[];
+
+      // Check videos: must have transcript, must not have summary
+      for (final file in videoFiles) {
+        final hasTranscript = await CrdtDatabase.instance.query(
+          '''
+          SELECT COUNT(*) as count FROM derivatives
+          WHERE file_id = ? AND type = 'transcript' AND status = 'completed'
+          ''',
+          [file.id],
+        );
+
+        final hasSummary = await CrdtDatabase.instance.query(
+          '''
+          SELECT COUNT(*) as count FROM derivatives
+          WHERE file_id = ? AND type = 'summary' AND status = 'completed'
+          ''',
+          [file.id],
+        );
+
+        final hasCompletedTranscript = (hasTranscript.first['count'] as int) > 0;
+        final hasCompletedSummary = (hasSummary.first['count'] as int) > 0;
+
+        print('[QueueSummaries] Video: ${file.name}, hasTranscript: $hasCompletedTranscript, hasSummary: $hasCompletedSummary');
+        if (hasCompletedTranscript && !hasCompletedSummary) {
+          filesNeedingSummary.add(file);
+        }
+      }
+
+      // Check PDFs: must not have summary
+      for (final file in pdfFiles) {
+        final hasSummary = await CrdtDatabase.instance.query(
+          '''
+          SELECT COUNT(*) as count FROM derivatives
+          WHERE file_id = ? AND type = 'summary' AND status = 'completed'
+          ''',
+          [file.id],
+        );
+
+        final hasCompletedSummary = (hasSummary.first['count'] as int) > 0;
+
+        print('[QueueSummaries] PDF: ${file.name}, hasSummary: $hasCompletedSummary');
+        if (!hasCompletedSummary) {
+          filesNeedingSummary.add(file);
+        }
+      }
+
+      print('[QueueSummaries] Total candidates: ${videoFiles.length + pdfFiles.length}, needing summaries: ${filesNeedingSummary.length}');
+
+      if (!mounted) return;
+
+      if (filesNeedingSummary.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text((videoFiles.isEmpty && pdfFiles.isEmpty)
+                ? 'No video or PDF files found'
+                : 'All files already have summaries'),
+          ),
+        );
+        return;
+      }
+
+      // Show confirmation dialog
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Queue Files for Summary'),
+          content: Text(
+            'Found ${filesNeedingSummary.length} file(s) without summaries.\n\n'
+            'Queue all for summary generation?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Queue All'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      // Queue files one by one with delays to avoid OOM
+      var queued = 0;
+
+      for (final file in filesNeedingSummary) {
+        await DerivativeService.instance.generateDerivative(file.id, 'summary');
+        queued++;
+
+        // Small delay between each file to prevent memory pressure
+        if (queued < filesNeedingSummary.length) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Queued $queued file(s) for summary generation',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error scanning files: $e')),
+        );
+      }
+    }
+  }
+
   Widget _buildBrowserTab() {
     return Column(
       children: [
@@ -692,6 +962,39 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                 onPressed: _goUp,
               )
             : null,
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'queue_transcripts') {
+                _queueVideosForTranscription();
+              } else if (value == 'queue_summaries') {
+                _queueFilesForSummary();
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'queue_transcripts',
+                child: Row(
+                  children: [
+                    Icon(Icons.subtitles),
+                    SizedBox(width: 12),
+                    Text('Queue videos for transcription'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'queue_summaries',
+                child: Row(
+                  children: [
+                    Icon(Icons.summarize),
+                    SizedBox(width: 12),
+                    Text('Queue files for summary'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
       body: body,
       floatingActionButton: _selectedTab == 0

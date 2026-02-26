@@ -28,7 +28,7 @@ class QueueConfig {
     required this.name,
     required this.eventPatterns,
     this.maxRetries = 3,
-    this.lockTimeoutSeconds = 30,
+    this.lockTimeoutSeconds = 900, // 15 minutes
     this.enabled = true,
     this.retryDelaysMs = const [3000, 9000, 180000], // 3s, 9s, 3min
   });

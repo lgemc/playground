@@ -14,12 +14,18 @@ class ChatStorage {
 
   /// Load all chats
   Future<List<Chat>> getAllChats() async {
+    print('[ChatStorage] getAllChats called');
     final results = await CrdtDatabase.instance.query('''
       SELECT id, title, created_at, updated_at, is_title_generating
       FROM chats
       WHERE deleted_at IS NULL
       ORDER BY updated_at DESC
     ''');
+
+    print('[ChatStorage] getAllChats found ${results.length} chats');
+    if (results.isNotEmpty) {
+      print('[ChatStorage] Chat IDs: ${results.map((r) => r['id']).toList()}');
+    }
 
     return results.map((row) {
       return Chat(
@@ -34,11 +40,17 @@ class ChatStorage {
 
   /// Load a specific chat by ID
   Future<Chat?> getChat(String chatId) async {
+    print('[ChatStorage] getChat called for: $chatId');
+    print('[ChatStorage] CrdtDatabase instance: ${CrdtDatabase.instance}');
+    print('[ChatStorage] CrdtDatabase nodeId: ${CrdtDatabase.instance.nodeId}');
+
     final results = await CrdtDatabase.instance.query('''
       SELECT id, title, created_at, updated_at, is_title_generating
       FROM chats
       WHERE id = ? AND deleted_at IS NULL
     ''', [chatId]);
+
+    print('[ChatStorage] Query returned ${results.length} results');
 
     if (results.isEmpty) return null;
 
@@ -96,7 +108,9 @@ class ChatStorage {
 
   /// Create a new chat
   Future<void> createChat(Chat chat) async {
+    print('[ChatStorage] createChat called for: ${chat.id}');
     final deviceId = await DeviceIdService.instance.getDeviceId();
+    print('[ChatStorage] deviceId: $deviceId');
 
     await CrdtDatabase.instance.execute('''
       INSERT OR REPLACE INTO chats (
@@ -111,6 +125,18 @@ class ChatStorage {
       deviceId,
     ]);
 
+    print('[ChatStorage] Chat ${chat.id} inserted into database');
+
+    // Verify it was inserted
+    final verifyResults = await CrdtDatabase.instance.query(
+      'SELECT * FROM chats WHERE id = ?',
+      [chat.id],
+    );
+    print('[ChatStorage] Verification query returned ${verifyResults.length} results');
+    if (verifyResults.isNotEmpty) {
+      print('[ChatStorage] Verified chat exists in DB: ${verifyResults.first}');
+    }
+
     await AppBus.instance.emit(AppEvent.create(
       type: 'chat.created',
       appId: 'chat',
@@ -119,6 +145,8 @@ class ChatStorage {
         'title': chat.title,
       },
     ));
+
+    print('[ChatStorage] chat.created event emitted for: ${chat.id}');
   }
 
   /// Update an existing chat

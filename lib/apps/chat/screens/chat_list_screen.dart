@@ -3,6 +3,7 @@ import '../models/chat.dart';
 import '../services/chat_storage.dart';
 import 'chat_detail_screen.dart';
 import 'package:uuid/uuid.dart';
+import '../../../core/app_bus.dart';
 
 class ChatListScreen extends StatefulWidget {
   const ChatListScreen({Key? key}) : super(key: key);
@@ -22,12 +23,25 @@ class _ChatListScreenState extends State<ChatListScreen> {
     super.initState();
     _loadChats();
     _searchController.addListener(_onSearchChanged);
+    _subscribeToChatEvents();
   }
 
   @override
   void dispose() {
+    AppBus.instance.unsubscribe('chat_list_screen');
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _subscribeToChatEvents() {
+    AppBus.instance.subscribe(
+      id: 'chat_list_screen',
+      eventTypes: ['chat:title_generated'],
+      callback: (event) async {
+        // Refresh the chat list when any title is generated
+        await _loadChats();
+      },
+    );
   }
 
   Future<void> _loadChats() async {

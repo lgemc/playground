@@ -260,8 +260,12 @@ class FileSystemStorage {
     final oldPath = p.join(storageDir.path, fileItem.relativePath);
     final newPath = p.join(storageDir.path, fileItem.folderPath, newName);
 
-    // Rename on filesystem
-    await File(oldPath).rename(newPath);
+    // Rename on filesystem only if file exists
+    // (metadata may exist in database before physical files are synced)
+    final oldFile = File(oldPath);
+    if (oldFile.existsSync()) {
+      await oldFile.rename(newPath);
+    }
 
     // Update database
     final newRelativePath = fileItem.folderPath.isEmpty
@@ -297,8 +301,12 @@ class FileSystemStorage {
 
     final newPath = p.join(newDir.path, fileItem.name);
 
-    // Move on filesystem
-    await File(oldPath).rename(newPath);
+    // Move on filesystem only if file exists
+    // (metadata may exist in database before physical files are synced)
+    final oldFile = File(oldPath);
+    if (oldFile.existsSync()) {
+      await oldFile.rename(newPath);
+    }
 
     // Update database
     final newRelativePath = newFolderPath.isEmpty
@@ -366,15 +374,33 @@ class FileSystemStorage {
   }
 
   Future<void> deleteFolder(String path) async {
-    final dir = Directory(p.join(storageDir.path, path));
+    // Check if folder has any non-deleted files in database
+    final files = await CrdtDatabase.instance.query(
+      'SELECT COUNT(*) as count FROM files WHERE folder_path = ? AND deleted_at IS NULL',
+      [path],
+    );
 
-    // Check if folder is empty
-    final contents = await dir.list().toList();
-    if (contents.isNotEmpty) {
+    final fileCount = files.first['count'] as int;
+    if (fileCount > 0) {
       throw Exception('Folder is not empty');
     }
 
-    await dir.delete();
+    // Check if folder has any non-deleted subfolders in database
+    final subfolders = await CrdtDatabase.instance.query(
+      'SELECT COUNT(*) as count FROM folders WHERE parent_path = ? AND deleted_at IS NULL',
+      [path],
+    );
+
+    final subfolderCount = subfolders.first['count'] as int;
+    if (subfolderCount > 0) {
+      throw Exception('Folder is not empty');
+    }
+
+    // Delete the physical directory (use recursive to handle any leftover files from failed deletions)
+    final dir = Directory(p.join(storageDir.path, path));
+    if (dir.existsSync()) {
+      await dir.delete(recursive: true);
+    }
 
     // Soft delete from database
     await CrdtDatabase.instance.execute(
@@ -399,8 +425,14 @@ class FileSystemStorage {
     final newPath = '${parts.join('/')}/';
     final newDir = Directory(p.join(storageDir.path, newPath));
 
-    // Rename directory
-    await oldDir.rename(newDir.path);
+    // Rename directory only if it exists on disk
+    // (metadata may exist in database before physical files are synced)
+    if (oldDir.existsSync()) {
+      await oldDir.rename(newDir.path);
+    } else {
+      // If old directory doesn't exist, just ensure new directory exists
+      await newDir.create(recursive: true);
+    }
 
     // Update folder record in database
     final parentParts = parts.sublist(0, parts.length - 1);
@@ -733,6 +765,71 @@ class FileSystemStorage {
 
   Future<void> close() async {
     // CRDT database is managed globally, no need to close
+  }
+
+  /// Clean up folders marked as deleted (useful after sync)
+  Future<void> cleanupDeletedFolders() async {
+    // Query folders marked as deleted
+    final deletedFolders = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM folders
+      WHERE deleted_at IS NOT NULL
+      ORDER BY path DESC
+      ''', // DESC order ensures we delete deepest folders first
+      [],
+    );
+
+    print('[FileSystem] Cleaning up ${deletedFolders.length} deleted folders');
+
+    for (final folderMap in deletedFolders) {
+      final path = folderMap['path'] as String;
+      final dir = Directory(p.join(storageDir.path, path));
+
+      if (dir.existsSync()) {
+        try {
+          // Delete recursively (even if not empty)
+          await dir.delete(recursive: true);
+          print('[FileSystem]   ✓ Deleted: $path');
+        } catch (e) {
+          print('[FileSystem]   ✗ Failed to delete $path: $e');
+        }
+      }
+    }
+  }
+
+  /// Ensure all folders in the database have physical directories on disk
+  Future<void> ensurePhysicalFoldersExist() async {
+    // Query all non-deleted folders
+    final folders = await CrdtDatabase.instance.query(
+      '''
+      SELECT * FROM folders
+      WHERE deleted_at IS NULL
+      ORDER BY path ASC
+      ''', // ASC order ensures we create parent folders first
+      [],
+    );
+
+    print('[FileSystem] Ensuring ${folders.length} folders exist on disk');
+
+    int created = 0;
+    for (final folderMap in folders) {
+      final path = folderMap['path'] as String;
+      final dir = Directory(p.join(storageDir.path, path));
+
+      if (!dir.existsSync()) {
+        try {
+          await dir.create(recursive: true);
+          print('[FileSystem]   ✓ Created: $path');
+          created++;
+        } catch (e) {
+          print('[FileSystem]   ✗ Failed to create $path: $e');
+        }
+      }
+    }
+
+    if (created > 0) {
+      print('[FileSystem] Created $created physical directories');
+    }
   }
 
   // === Sync Operations ===

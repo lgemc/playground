@@ -248,14 +248,46 @@ class QueueService {
     await _releaseExpiredLocks();
 
     // Find an available message (not locked, lock expired, and visible)
-    final results = await _database!.query(
-      'queue_messages',
-      where:
-          'queue_id = ? AND (locked_by IS NULL OR lock_expires_at < ?) AND (visible_after IS NULL OR visible_after <= ?)',
-      whereArgs: [queueId, now.millisecondsSinceEpoch, now.millisecondsSinceEpoch],
-      orderBy: 'timestamp ASC',
-      limit: 1,
-    );
+    List<Map<String, dynamic>> results;
+    try {
+      results = await _database!.query(
+        'queue_messages',
+        where:
+            'queue_id = ? AND (locked_by IS NULL OR lock_expires_at < ?) AND (visible_after IS NULL OR visible_after <= ?)',
+        whereArgs: [queueId, now.millisecondsSinceEpoch, now.millisecondsSinceEpoch],
+        orderBy: 'timestamp ASC',
+        limit: 1,
+      );
+    } catch (e) {
+      // Handle "Row too big to fit into CursorWindow" error
+      if (e.toString().contains('Row too big') || e.toString().contains('CursorWindow')) {
+        print('[QueueService] Detected oversized message in queue $queueId, moving to DLQ');
+        // Move oversized message to DLQ using raw SQL (to avoid reading the large payload)
+        await _database!.execute('''
+          INSERT INTO dlq_messages
+          SELECT id, queue_id, event_type, app_id, timestamp, '', delivery_count, last_delivered_at, ?, 'Message too large (>2MB)'
+          FROM queue_messages
+          WHERE queue_id = ? AND (locked_by IS NULL OR lock_expires_at < ?) AND (visible_after IS NULL OR visible_after <= ?)
+          ORDER BY timestamp ASC
+          LIMIT 1
+        ''', [now.millisecondsSinceEpoch, queueId, now.millisecondsSinceEpoch, now.millisecondsSinceEpoch]);
+
+        // Delete the oversized message from queue
+        await _database!.execute('''
+          DELETE FROM queue_messages
+          WHERE id = (
+            SELECT id FROM queue_messages
+            WHERE queue_id = ? AND (locked_by IS NULL OR lock_expires_at < ?)
+            ORDER BY timestamp ASC
+            LIMIT 1
+          )
+        ''', [queueId, now.millisecondsSinceEpoch]);
+
+        // Retry with next message
+        return fetchMessage(queueId: queueId, consumerId: consumerId, lockTimeoutSeconds: lockTimeoutSeconds);
+      }
+      rethrow;
+    }
 
     if (results.isEmpty) return null;
 

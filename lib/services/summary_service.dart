@@ -59,7 +59,7 @@ The summary should:
     final truncatedText = _truncateText(text, maxInputChars);
     final prompt = 'Please summarize the following text:\n\n$truncatedText';
 
-    return _autocompletion.promptStream(
+    return _autocompletion.promptStreamContentOnly(
       prompt,
       systemPrompt: _systemPrompt,
       temperature: 0.3, // Lower temperature for more focused summaries
@@ -85,12 +85,17 @@ The summary should:
     final truncatedText = _truncateText(text, maxInputChars);
     final prompt = 'Please summarize the following text:\n\n$truncatedText';
 
-    return _autocompletion.prompt(
+    // Use streaming and collect to ensure reasoning is filtered
+    final buffer = StringBuffer();
+    await for (final chunk in _autocompletion.promptStreamContentOnly(
       prompt,
       systemPrompt: _systemPrompt,
       temperature: 0.3, // Lower temperature for more focused summaries
       maxTokens: summaryMaxTokens,
-    );
+    )) {
+      buffer.write(chunk);
+    }
+    return buffer.toString();
   }
 
   /// Check if the service is configured

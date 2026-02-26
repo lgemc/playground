@@ -163,15 +163,36 @@ class ConceptExtractionConsumer extends QueueConsumer {
       } else if (message.eventType == 'derivative.completed') {
         // Derivative artifact completed (transcript, summary, etc.)
         final derivativeType = message.payload['type'] as String?;
-        final content = message.payload['content'] as String?;
+        final derivativeId = message.payload['derivative_id'] as String?;
         final fileId = message.payload['file_id'] as String?;
 
-        if (content == null) {
+        if (derivativeId == null) {
           _logger.log(
-            'Derivative completed but no content provided',
+            'Derivative completed but no derivative_id provided',
             severity: LogSeverity.warning,
           );
           return true; // Not an error, just nothing to do
+        }
+
+        // Fetch content from storage (not from message payload to avoid CursorWindow limit)
+        final fileSystemStorage = FileSystemStorage.instance;
+        String? content;
+        try {
+          content = await fileSystemStorage.getDerivativeContent(derivativeId);
+        } catch (e) {
+          _logger.log(
+            'Failed to fetch derivative content: $e',
+            severity: LogSeverity.error,
+          );
+          return false; // Retry
+        }
+
+        if (content == null || content.isEmpty) {
+          _logger.log(
+            'Derivative content is empty',
+            severity: LogSeverity.warning,
+          );
+          return true; // Not an error, just nothing to extract
         }
 
         // Resolve activity_id/course_id from file_id if not directly provided

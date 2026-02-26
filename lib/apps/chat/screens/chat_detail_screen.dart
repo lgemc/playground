@@ -131,6 +131,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     // Only generate if title is still pending and there are messages
     if (!_currentChat.isTitleGenerating || _messages.isEmpty) return;
 
+    print('[ChatDetail] Enqueuing title generation for chat: ${_currentChat.id}');
+
+    // Verify chat exists before emitting event
+    final chatExists = await ChatStorage.instance.getChat(_currentChat.id);
+    print('[ChatDetail] Chat exists check: ${chatExists != null}');
+    if (chatExists == null) {
+      print('[ChatDetail] ERROR: Chat ${_currentChat.id} does not exist in database!');
+      return;
+    }
+
     // Emit event to trigger title generation via queue
     final event = AppEvent.create(
       type: 'chat.title_generate',
@@ -140,6 +150,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       },
     );
     await AppBus.instance.emit(event);
+    print('[ChatDetail] Title generation event emitted for chat: ${_currentChat.id}');
   }
 
   Future<void> _shareText(String text) async {

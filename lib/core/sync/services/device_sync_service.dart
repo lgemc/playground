@@ -193,6 +193,25 @@ class DeviceSyncService {
         await _updateLastSyncTime(appId, device.id);
       }
 
+      // Clean up deleted folders and ensure physical folders exist after metadata sync
+      if (appId == 'crdt_database' && result.success) {
+        print('[Sync] Cleaning up deleted folders...');
+        try {
+          await FileSystemStorage.instance.cleanupDeletedFolders();
+          print('[Sync] ✅ Deleted folders cleaned up');
+        } catch (e) {
+          print('[Sync] ❌ Error cleaning deleted folders: $e');
+        }
+
+        print('[Sync] Ensuring physical folders exist...');
+        try {
+          await FileSystemStorage.instance.ensurePhysicalFoldersExist();
+          print('[Sync] ✅ Physical folders ensured');
+        } catch (e) {
+          print('[Sync] ❌ Error ensuring physical folders: $e');
+        }
+      }
+
       // Perform bidirectional blob sync for file_system when syncing crdt_database
       if (appId == 'crdt_database' && result.success) {
         // Step 1: Wait for responder's blob request (if any)
@@ -336,6 +355,25 @@ class DeviceSyncService {
               (appId, entities) => _applyChangesCallback!(appId, entities),
             );
             print('[Sync] ✅ handleSyncRequest completed');
+
+            // Clean up deleted folders and ensure physical folders exist after metadata sync
+            if (syncedAppId == 'crdt_database') {
+              print('[Sync] Cleaning up deleted folders...');
+              try {
+                await FileSystemStorage.instance.cleanupDeletedFolders();
+                print('[Sync] ✅ Deleted folders cleaned up');
+              } catch (e) {
+                print('[Sync] ❌ Error cleaning deleted folders: $e');
+              }
+
+              print('[Sync] Ensuring physical folders exist...');
+              try {
+                await FileSystemStorage.instance.ensurePhysicalFoldersExist();
+                print('[Sync] ✅ Physical folders ensured');
+              } catch (e) {
+                print('[Sync] ❌ Error ensuring physical folders: $e');
+              }
+            }
 
             // Don't break - connection stays open for more syncs or blob requests
             if (syncedAppId == 'crdt_database') {

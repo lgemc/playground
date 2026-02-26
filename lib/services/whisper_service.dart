@@ -70,6 +70,7 @@ class WhisperService {
   }
 
   /// Direct multipart POST — works for files under 5 MB / non-tunnel URLs.
+  /// Uses streaming to avoid loading entire file into memory.
   Future<Map<String, dynamic>> _transcribeDirect(
     String filePath, {
     required int timeoutSeconds,
@@ -78,10 +79,17 @@ class WhisperService {
         _config.get(WhisperConfig.language) ?? WhisperConfig.defaultLanguage;
 
     final uri = Uri.parse('$_baseUrl/transcribe');
+    final file = File(filePath);
+    final fileSize = await file.length();
 
     final request = http.MultipartRequest('POST', uri)
       ..fields['language'] = language
-      ..files.add(await http.MultipartFile.fromPath('file', filePath));
+      ..files.add(http.MultipartFile(
+        'file',
+        file.openRead(), // Stream instead of loading into memory
+        fileSize,
+        filename: filePath.split('/').last,
+      ));
 
     final streamedResponse = await request.send().timeout(
           Duration(seconds: timeoutSeconds),
@@ -160,13 +168,14 @@ class WhisperService {
     }
 
     // ── Step 2: build multipart body and PUT directly to S3 ──────────────────
-    // Construct the multipart body manually so it can be PUT to S3.
-    // boundary and contentType were defined above for step 1.
-    final fileBytes = await File(filePath).readAsBytes();
+    // Stream the file to avoid loading entire file into memory
+    final file = File(filePath);
     final fileName = filePath.split(Platform.pathSeparator).last;
+    final fileSize = await file.length();
 
-    final bodyParts = <int>[];
-    void addString(String s) => bodyParts.addAll(s.codeUnits);
+    // Calculate multipart boundaries size
+    final headerParts = <int>[];
+    void addString(String s) => headerParts.addAll(s.codeUnits);
 
     addString('--$boundary\r\n');
     addString('Content-Disposition: form-data; name="language"\r\n\r\n');
@@ -175,13 +184,12 @@ class WhisperService {
     addString(
         'Content-Disposition: form-data; name="file"; filename="$fileName"\r\n');
     addString('Content-Type: application/octet-stream\r\n\r\n');
-    bodyParts.addAll(fileBytes);
-    addString('\r\n--$boundary--\r\n');
 
-    // Use dart:io HttpClient to set Content-Length explicitly.
-    // S3 presigned PUTs reject chunked transfer encoding (broken pipe / 501),
-    // so we must send Content-Length and stream the body in one shot.
-    final bodyBytes = Uint8List.fromList(bodyParts);
+    final footerBytes = '\r\n--$boundary--\r\n'.codeUnits;
+    final totalSize = headerParts.length + fileSize + footerBytes.length;
+
+    // Use dart:io HttpClient to stream the body with Content-Length.
+    // S3 presigned PUTs reject chunked transfer encoding.
     final ioClient = HttpClient();
     late int putStatusCode;
     late String putResponseBody;
@@ -189,9 +197,18 @@ class WhisperService {
       final req = await ioClient
           .putUrl(Uri.parse(uploadUrl))
           .timeout(Duration(seconds: timeoutSeconds));
-      req.headers.set(HttpHeaders.contentLengthHeader, bodyBytes.length);
+      req.headers.set(HttpHeaders.contentLengthHeader, totalSize);
       req.headers.set(HttpHeaders.contentTypeHeader, 'application/octet-stream');
-      req.add(bodyBytes);
+
+      // Write header
+      req.add(headerParts);
+
+      // Stream file content in chunks (avoids loading entire file into memory)
+      await req.addStream(file.openRead());
+
+      // Write footer
+      req.add(footerBytes);
+
       final res = await req.close().timeout(Duration(seconds: timeoutSeconds));
       putStatusCode = res.statusCode;
       putResponseBody = await res.transform(const Utf8Decoder()).join();

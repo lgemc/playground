@@ -4,6 +4,7 @@ import '../../../services/logger.dart';
 import '../../../services/queue_message.dart';
 import '../../../services/queue_service.dart';
 import '../../../services/autocompletion_service.dart';
+import '../models/chat.dart';
 import 'chat_storage.dart';
 
 /// Service that listens to the chat title generation queue and processes title tasks using AI
@@ -44,15 +45,50 @@ class ChatTitleService {
         return false;
       }
 
-      _logger.log('Processing title generation for chat: $chatId',
-          severity: LogSeverity.info);
+      final eventTimestamp = message.timestamp;
+      final now = DateTime.now();
+      final delayMs = now.difference(eventTimestamp).inMilliseconds;
 
-      // Load the chat from storage
-      final chat = await ChatStorage.instance.getChat(chatId);
+      _logger.log('Processing title generation for chat: $chatId (delay: ${delayMs}ms)',
+          severity: LogSeverity.info);
+      print('[ChatTitle] Starting title generation for: $chatId');
+      print('[ChatTitle] Event timestamp: $eventTimestamp');
+      print('[ChatTitle] Current time: $now');
+      print('[ChatTitle] Processing delay: ${delayMs}ms');
+
+      // Load the chat from storage with retry logic
+      // Note: There can be timing issues where:
+      // 1. Local: Event processed before database write fully committed
+      // 2. Sync: Event doesn't sync (stored in app_bus.db), but chat data does (CRDT)
+      Chat? chat;
+      int attempts = 0;
+      const maxAttempts = 3;
+      while (chat == null && attempts < maxAttempts) {
+        print('[ChatTitle] Attempt ${attempts + 1}/$maxAttempts: Querying database for chat $chatId');
+        chat = await ChatStorage.instance.getChat(chatId);
+        print('[ChatTitle] Query result: ${chat != null ? "FOUND" : "NOT FOUND"}');
+
+        if (chat == null) {
+          attempts++;
+          if (attempts < maxAttempts) {
+            final waitMs = 500 * attempts;
+            _logger.log('Chat not found: $chatId (attempt $attempts/$maxAttempts), waiting ${waitMs}ms...',
+                severity: LogSeverity.warning);
+            print('[ChatTitle] Waiting ${waitMs}ms before retry...');
+            await Future.delayed(Duration(milliseconds: waitMs)); // 500ms, 1s, 1.5s
+          }
+        }
+      }
+
       if (chat == null) {
-        _logger.log('Chat not found: $chatId', severity: LogSeverity.error);
+        _logger.log('Chat not found after $maxAttempts attempts: $chatId',
+            severity: LogSeverity.error);
+        print('[ChatTitle] FAILED: Chat $chatId still not found after $maxAttempts attempts');
+        // Return false to trigger queue retry with exponential backoff
         return false;
       }
+
+      print('[ChatTitle] SUCCESS: Chat found on attempt ${attempts + 1}');
 
       // Check if title already exists (not generating and has a real title)
       _logger.log(

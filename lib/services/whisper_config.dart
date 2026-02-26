@@ -20,5 +20,5 @@ class WhisperConfig {
   static const String defaultBaseUrl = 'http://localhost:8001';
   static const String defaultModel = 'Systran/faster-whisper-large-v3';
   static const String defaultLanguage = 'en';
-  static const String defaultTimeoutSeconds = '600'; // 10 minutes
+  static const String defaultTimeoutSeconds = '900'; // 15 minutes
 }
