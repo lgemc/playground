@@ -2,6 +2,10 @@ import 'dart:convert';
 import 'autocompletion_service.dart';
 import '../core/tool.dart';
 import '../apps/lms/shared/services/lms_crdt_storage_service.dart';
+import '../apps/lms/shared/models/course.dart';
+import '../apps/lms/shared/models/lesson_module.dart';
+import '../apps/lms/shared/models/lesson_sub_section.dart';
+import '../apps/lms/shared/models/activity.dart';
 import '../apps/file_system/services/file_system_storage.dart';
 
 /// Simple message storage
@@ -30,11 +34,18 @@ class OrchestratorAgentService {
 
   final String _systemPrompt = '''You are a helpful AI assistant with access to file system and LMS course management tools.
 
+Available capabilities:
+- List and view courses, modules, subsections, and activities
+- Create courses with modules, subsections, and activities
+- List folders and files from the file system
+- Attach files to activities when creating them
+
 CRITICAL INSTRUCTIONS:
 - When you call a tool, you MUST read the "data" field from the tool result
-- Extract the actual details (names, paths, etc.) and present them to the user
+- Extract the actual details (names, paths, IDs, etc.) and present them to the user
 - NEVER just repeat the tool's "message" field
 - ALWAYS show the specific items from the "data" field
+- When creating course structures, remember to use the IDs returned from previous creations
 
 Example: When list_courses returns:
 {
@@ -84,9 +95,15 @@ Always format the actual data from tool results in a clear, readable way.''';
     final lmsStorage = LmsCrdtStorageService.instance;
     final fileStorage = FileSystemStorage.instance;
 
-    // LMS Tools
+    // LMS Tools - Read
     _registerAgenixTool(_createListCoursesTool(lmsStorage));
     _registerAgenixTool(_createGetCourseTool(lmsStorage));
+
+    // LMS Tools - Write
+    _registerAgenixTool(_createCreateCourseTool(lmsStorage));
+    _registerAgenixTool(_createCreateModuleTool(lmsStorage));
+    _registerAgenixTool(_createCreateSubSectionTool(lmsStorage));
+    _registerAgenixTool(_createCreateActivityTool(lmsStorage));
 
     // File System Tools
     _registerAgenixTool(_createListFoldersTool(fileStorage));
@@ -250,13 +267,345 @@ Always format the actual data from tool results in a clear, readable way.''';
     );
   }
 
-  /// Send a message and get a response
-  Future<String> chat(String message) async {
+  Tool _createCreateCourseTool(LmsCrdtStorageService storage) {
+    return Tool(
+      name: 'create_course',
+      description: 'Create a new course with a name and optional description',
+      parameters: {
+        'type': 'object',
+        'properties': {
+          'name': {
+            'type': 'string',
+            'description': 'The name of the course',
+          },
+          'description': {
+            'type': 'string',
+            'description': 'Optional description of the course',
+          },
+        },
+        'required': ['name'],
+      },
+      handler: (args) async {
+        try {
+          final name = args['name'] as String?;
+          if (name == null || name.trim().isEmpty) {
+            return ToolResult.failure('Course name is required');
+          }
+
+          final description = args['description'] as String?;
+
+          final course = Course.create(
+            name: name.trim(),
+            description: description?.trim(),
+          );
+
+          await storage.saveCourse(course);
+
+          return ToolResult.success({
+            'message': 'Created course: ${course.name}',
+            'data': {
+              'course_id': course.id,
+              'name': course.name,
+              'description': course.description,
+            },
+          });
+        } catch (e) {
+          return ToolResult.failure('Failed to create course: $e');
+        }
+      },
+    );
+  }
+
+  Tool _createCreateModuleTool(LmsCrdtStorageService storage) {
+    return Tool(
+      name: 'create_module',
+      description: 'Create a new module inside a course. Modules are the main sections of a course.',
+      parameters: {
+        'type': 'object',
+        'properties': {
+          'course_id': {
+            'type': 'string',
+            'description': 'The ID of the course to add the module to',
+          },
+          'name': {
+            'type': 'string',
+            'description': 'The name of the module',
+          },
+          'description': {
+            'type': 'string',
+            'description': 'Optional description of the module',
+          },
+        },
+        'required': ['course_id', 'name'],
+      },
+      handler: (args) async {
+        try {
+          final courseId = args['course_id'] as String?;
+          if (courseId == null || courseId.trim().isEmpty) {
+            return ToolResult.failure('Course ID is required');
+          }
+
+          final name = args['name'] as String?;
+          if (name == null || name.trim().isEmpty) {
+            return ToolResult.failure('Module name is required');
+          }
+
+          // Check if course exists
+          final course = await storage.getCourse(courseId);
+          if (course == null) {
+            return ToolResult.failure('Course not found with id: $courseId');
+          }
+
+          final description = args['description'] as String?;
+
+          // Calculate order (next position)
+          final order = course.modules.length;
+
+          final module = LessonModule.create(
+            courseId: courseId,
+            name: name.trim(),
+            description: description?.trim(),
+            order: order,
+          );
+
+          await storage.saveModule(courseId, module);
+
+          return ToolResult.success({
+            'message': 'Created module: ${module.name} in course: ${course.name}',
+            'data': {
+              'module_id': module.id,
+              'course_id': courseId,
+              'name': module.name,
+              'description': module.description,
+              'order': module.order,
+            },
+          });
+        } catch (e) {
+          return ToolResult.failure('Failed to create module: $e');
+        }
+      },
+    );
+  }
+
+  Tool _createCreateSubSectionTool(LmsCrdtStorageService storage) {
+    return Tool(
+      name: 'create_subsection',
+      description: 'Create a new subsection inside a module. Subsections are subdivisions within modules.',
+      parameters: {
+        'type': 'object',
+        'properties': {
+          'course_id': {
+            'type': 'string',
+            'description': 'The ID of the course',
+          },
+          'module_id': {
+            'type': 'string',
+            'description': 'The ID of the module to add the subsection to',
+          },
+          'name': {
+            'type': 'string',
+            'description': 'The name of the subsection',
+          },
+          'description': {
+            'type': 'string',
+            'description': 'Optional description of the subsection',
+          },
+        },
+        'required': ['course_id', 'module_id', 'name'],
+      },
+      handler: (args) async {
+        try {
+          final courseId = args['course_id'] as String?;
+          if (courseId == null || courseId.trim().isEmpty) {
+            return ToolResult.failure('Course ID is required');
+          }
+
+          final moduleId = args['module_id'] as String?;
+          if (moduleId == null || moduleId.trim().isEmpty) {
+            return ToolResult.failure('Module ID is required');
+          }
+
+          final name = args['name'] as String?;
+          if (name == null || name.trim().isEmpty) {
+            return ToolResult.failure('Subsection name is required');
+          }
+
+          // Check if course and module exist
+          final course = await storage.getCourse(courseId);
+          if (course == null) {
+            return ToolResult.failure('Course not found with id: $courseId');
+          }
+
+          final module = course.modules.where((m) => m.id == moduleId).firstOrNull;
+          if (module == null) {
+            return ToolResult.failure('Module not found with id: $moduleId');
+          }
+
+          final description = args['description'] as String?;
+
+          // Calculate order (next position)
+          final order = module.subSections.length;
+
+          final subSection = LessonSubSection.create(
+            moduleId: moduleId,
+            name: name.trim(),
+            description: description?.trim(),
+            order: order,
+          );
+
+          await storage.saveSubSection(courseId, moduleId, subSection);
+
+          return ToolResult.success({
+            'message': 'Created subsection: ${subSection.name} in module: ${module.name}',
+            'data': {
+              'subsection_id': subSection.id,
+              'module_id': moduleId,
+              'course_id': courseId,
+              'name': subSection.name,
+              'description': subSection.description,
+              'order': subSection.order,
+            },
+          });
+        } catch (e) {
+          return ToolResult.failure('Failed to create subsection: $e');
+        }
+      },
+    );
+  }
+
+  Tool _createCreateActivityTool(LmsCrdtStorageService storage) {
+    return Tool(
+      name: 'create_activity',
+      description: 'Create a new activity inside a subsection. Activities can have attached files (lecture, video, audio, document, etc.).',
+      parameters: {
+        'type': 'object',
+        'properties': {
+          'course_id': {
+            'type': 'string',
+            'description': 'The ID of the course',
+          },
+          'module_id': {
+            'type': 'string',
+            'description': 'The ID of the module',
+          },
+          'subsection_id': {
+            'type': 'string',
+            'description': 'The ID of the subsection to add the activity to',
+          },
+          'name': {
+            'type': 'string',
+            'description': 'The name of the activity',
+          },
+          'description': {
+            'type': 'string',
+            'description': 'Optional description of the activity',
+          },
+          'file_id': {
+            'type': 'string',
+            'description': 'Optional ID of a file from the file system to attach to this activity',
+          },
+          'resource_type': {
+            'type': 'string',
+            'description': 'The type of resource: lecture, audio, video, document, or other',
+            'enum': ['lecture', 'audio', 'video', 'document', 'other'],
+          },
+        },
+        'required': ['course_id', 'module_id', 'subsection_id', 'name', 'resource_type'],
+      },
+      handler: (args) async {
+        try {
+          final courseId = args['course_id'] as String?;
+          if (courseId == null || courseId.trim().isEmpty) {
+            return ToolResult.failure('Course ID is required');
+          }
+
+          final moduleId = args['module_id'] as String?;
+          if (moduleId == null || moduleId.trim().isEmpty) {
+            return ToolResult.failure('Module ID is required');
+          }
+
+          final subsectionId = args['subsection_id'] as String?;
+          if (subsectionId == null || subsectionId.trim().isEmpty) {
+            return ToolResult.failure('Subsection ID is required');
+          }
+
+          final name = args['name'] as String?;
+          if (name == null || name.trim().isEmpty) {
+            return ToolResult.failure('Activity name is required');
+          }
+
+          final resourceTypeStr = args['resource_type'] as String?;
+          if (resourceTypeStr == null) {
+            return ToolResult.failure('Resource type is required');
+          }
+
+          // Validate resource type
+          final resourceType = ResourceType.values.where((t) => t.name == resourceTypeStr).firstOrNull;
+          if (resourceType == null) {
+            return ToolResult.failure('Invalid resource type: $resourceTypeStr');
+          }
+
+          // Check if course, module, and subsection exist
+          final course = await storage.getCourse(courseId);
+          if (course == null) {
+            return ToolResult.failure('Course not found with id: $courseId');
+          }
+
+          final module = course.modules.where((m) => m.id == moduleId).firstOrNull;
+          if (module == null) {
+            return ToolResult.failure('Module not found with id: $moduleId');
+          }
+
+          final subsection = module.subSections.where((s) => s.id == subsectionId).firstOrNull;
+          if (subsection == null) {
+            return ToolResult.failure('Subsection not found with id: $subsectionId');
+          }
+
+          final description = args['description'] as String?;
+          final fileId = args['file_id'] as String?;
+
+          // Calculate order (next position)
+          final order = subsection.activities.length;
+
+          final activity = ResourceFileActivity.create(
+            subSectionId: subsectionId,
+            name: name.trim(),
+            description: description?.trim(),
+            order: order,
+            fileId: fileId,
+            resourceType: resourceType,
+          );
+
+          await storage.saveActivity(courseId, moduleId, subsectionId, activity);
+
+          return ToolResult.success({
+            'message': 'Created activity: ${activity.name} in subsection: ${subsection.name}',
+            'data': {
+              'activity_id': activity.id,
+              'subsection_id': subsectionId,
+              'module_id': moduleId,
+              'course_id': courseId,
+              'name': activity.name,
+              'description': activity.description,
+              'file_id': activity.fileId,
+              'resource_type': activity.resourceType.name,
+              'order': activity.order,
+            },
+          });
+        } catch (e) {
+          return ToolResult.failure('Failed to create activity: $e');
+        }
+      },
+    );
+  }
+
+  /// Send a message and get a streaming response
+  Stream<String> chatStream(String message) async* {
     if (!_isInitialized) {
       await initialize();
     }
 
-    // Add user message
+    // Add user message to service's internal history
     _messages.add(AssistantMessage(
       content: message,
       timestamp: DateTime.now(),
@@ -279,6 +628,7 @@ Always format the actual data from tool results in a clear, readable way.''';
       )) {
         if (event is ContentChunk) {
           buffer.write(event.content);
+          yield event.content; // Stream the chunk to UI
         } else if (event is ToolCallEvent) {
           toolCalls.add(event);
         }
@@ -292,7 +642,7 @@ Always format the actual data from tool results in a clear, readable way.''';
           timestamp: DateTime.now(),
           isUser: false,
         ));
-        return response;
+        return;
       }
 
       // Execute tool calls

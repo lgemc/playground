@@ -56,38 +56,66 @@ class _AssistantChatScreenState extends State<AssistantChatScreen> {
     final text = _messageController.text.trim();
     if (text.isEmpty || _isLoading) return;
 
-    _messageController.clear();
+    // Add user message to UI immediately
+    final userMessage = AssistantMessage(
+      content: text,
+      timestamp: DateTime.now(),
+      isUser: true,
+    );
 
     setState(() {
+      _messages.add(userMessage);
       _isLoading = true;
+    });
+
+    _messageController.clear();
+    _scrollToBottom();
+
+    // Create placeholder for AI response
+    final aiMessage = AssistantMessage(
+      content: '',
+      timestamp: DateTime.now(),
+      isUser: false,
+    );
+
+    setState(() {
+      _messages.add(aiMessage);
     });
 
     _scrollToBottom();
 
     try {
-      // Send to orchestrator (it handles adding messages internally)
-      await OrchestratorAgentService.instance.chat(text);
+      final buffer = StringBuffer();
 
-      // Reload messages from service
-      final messages = OrchestratorAgentService.instance.getMessages();
+      // Stream the response
+      await for (final chunk in OrchestratorAgentService.instance.chatStream(text)) {
+        buffer.write(chunk);
 
-      setState(() {
-        _messages.clear();
-        _messages.addAll(messages);
-        _isLoading = false;
-      });
+        // Update the AI message with streamed content
+        setState(() {
+          _messages[_messages.length - 1] = AssistantMessage(
+            content: buffer.toString(),
+            timestamp: aiMessage.timestamp,
+            isUser: false,
+          );
+        });
 
-      _scrollToBottom();
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        _scrollToBottom();
       }
+
+      setState(() {
+        _isLoading = false;
+      });
+    } catch (e) {
+      // Update AI message with error
+      setState(() {
+        _messages[_messages.length - 1] = AssistantMessage(
+          content: 'Error: $e',
+          timestamp: aiMessage.timestamp,
+          isUser: false,
+        );
+        _isLoading = false;
+      });
     }
   }
 
@@ -216,8 +244,18 @@ class _AssistantChatScreenState extends State<AssistantChatScreen> {
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.all(16),
-      itemCount: _messages.length,
+      itemCount: _messages.length + (_isLoading ? 1 : 0),
       itemBuilder: (context, index) {
+        if (index == _messages.length && _isLoading) {
+          // Show loading indicator if AI message is empty
+          final lastMessage = _messages.isNotEmpty ? _messages.last : null;
+          if (lastMessage != null && !lastMessage.isUser && lastMessage.content.isEmpty) {
+            return _buildLoadingBubble();
+          }
+        }
+
+        if (index >= _messages.length) return const SizedBox.shrink();
+
         final message = _messages[index];
         return _MessageBubble(
           content: message.content,
@@ -225,6 +263,54 @@ class _AssistantChatScreenState extends State<AssistantChatScreen> {
           isUser: message.isUser,
         );
       },
+    );
+  }
+
+  Widget _buildLoadingBubble() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            backgroundColor: AssistantTheme.primary.withValues(alpha: 0.1),
+            radius: 16,
+            child: const Icon(Icons.smart_toy, size: 18, color: AssistantTheme.primary),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: AssistantTheme.aiBubble,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(AssistantTheme.primary),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Thinking...',
+                    style: TextStyle(
+                      color: AssistantTheme.aiBubbleText,
+                      fontSize: 15,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
