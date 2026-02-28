@@ -230,10 +230,22 @@ class DeviceSyncService {
             if (message.type == SyncMessageType.blobRequest) {
               print('[Sync] Received blob request from responder, handling...');
               final storage = FileSystemStorage.instance;
+
+              // Try to handle as file blob first, then derivative blob
               await coordinator.handleBlobRequest(
                 message,
-                (hash) => storage.getAbsolutePathByHash(hash),
-                (hash) => storage.getRelativePathByHash(hash),
+                (hash) async {
+                  // Try file first, then derivative
+                  final filePath = await storage.getAbsolutePathByHash(hash);
+                  if (filePath != null) return filePath;
+                  return await storage.getDerivativeAbsolutePathByHash(hash);
+                },
+                (hash) async {
+                  // Try file first, then derivative
+                  final relPath = await storage.getRelativePathByHash(hash);
+                  if (relPath != null) return relPath;
+                  return await storage.getDerivativeRelativePathByHash(hash);
+                },
               );
               print('[Sync] Sent blobs to responder');
               receivedResponderRequest = true;
@@ -254,10 +266,22 @@ class DeviceSyncService {
           print('[Sync] Error handling responder blob request: $e');
         }
 
-        // Step 2: Request our own blobs from responder
-        print('[Sync] Step 2: Checking if initiator needs blobs...');
+        // Step 2: Request our own file blobs from responder
+        print('[Sync] Step 2: Checking if initiator needs file blobs...');
         await _syncFileBlobs(coordinator);
-        print('[Sync] Bidirectional blob sync completed');
+        print('[Sync] File blob sync completed');
+
+        // Step 3: Sync derivative blobs (both directions)
+        print('[Sync] Step 3: Starting derivative blob sync...');
+
+        // First, regenerate missing hashes for existing derivatives
+        print('[Sync] Regenerating missing derivative hashes...');
+        await FileSystemStorage.instance.regenerateDerivativeHashes();
+
+        await _syncDerivativeBlobs(coordinator);
+        print('[Sync] Derivative blob sync completed');
+
+        print('[Sync] Bidirectional blob sync (files + derivatives) completed');
       }
 
       // Clean up
@@ -284,6 +308,22 @@ class DeviceSyncService {
       );
     } catch (e) {
       print('[Sync] Blob sync error: $e');
+    }
+  }
+
+  /// Sync derivative blobs after metadata sync (initiator side)
+  Future<void> _syncDerivativeBlobs(SyncCoordinator coordinator) async {
+    try {
+      final storage = FileSystemStorage.instance;
+
+      await coordinator.syncBlobs(
+        () => storage.getMissingDerivativeHashes(),
+        (hash) => storage.getDerivativeAbsolutePathByHash(hash),
+        (hash) => storage.getDerivativeRelativePathByHash(hash),
+        (hash, tempFilePath, relativePath) => storage.storeDerivativeBlob(hash, tempFilePath, relativePath),
+      );
+    } catch (e) {
+      print('[Sync] Derivative blob sync error: $e');
     }
   }
 
@@ -377,13 +417,13 @@ class DeviceSyncService {
 
             // Don't break - connection stays open for more syncs or blob requests
             if (syncedAppId == 'crdt_database') {
-              print('[Sync] Metadata sync done, checking if responder needs blobs...');
+              print('[Sync] Metadata sync done, checking if responder needs file blobs...');
 
-              // Perform blob sync using coordinator (this will block until complete or timeout)
+              // Perform file blob sync using coordinator
               final storage = FileSystemStorage.instance;
-              final neededHashes = await storage.getMissingBlobHashes();
-              if (neededHashes.isNotEmpty) {
-                print('[Sync] Responder needs ${neededHashes.length} blobs, starting blob sync...');
+              final neededFileHashes = await storage.getMissingBlobHashes();
+              if (neededFileHashes.isNotEmpty) {
+                print('[Sync] Responder needs ${neededFileHashes.length} file blobs, starting sync...');
                 try {
                   await coordinator.syncBlobs(
                     () => storage.getMissingBlobHashes(),
@@ -391,12 +431,37 @@ class DeviceSyncService {
                     (hash) => storage.getRelativePathByHash(hash),
                     (hash, tempFilePath, relativePath) => storage.storeBlobByPath(hash, tempFilePath, relativePath),
                   );
-                  print('[Sync] Responder blob sync completed successfully');
+                  print('[Sync] Responder file blob sync completed successfully');
                 } catch (e) {
-                  print('[Sync] Responder blob sync error: $e');
+                  print('[Sync] Responder file blob sync error: $e');
                 }
               } else {
-                print('[Sync] Responder has all blobs');
+                print('[Sync] Responder has all file blobs');
+              }
+
+              // Perform derivative blob sync
+              print('[Sync] Checking if responder needs derivative blobs...');
+
+              // First regenerate missing hashes
+              print('[Sync] Regenerating missing derivative hashes...');
+              await storage.regenerateDerivativeHashes();
+
+              final neededDerivativeHashes = await storage.getMissingDerivativeHashes();
+              if (neededDerivativeHashes.isNotEmpty) {
+                print('[Sync] Responder needs ${neededDerivativeHashes.length} derivative blobs, starting sync...');
+                try {
+                  await coordinator.syncBlobs(
+                    () => storage.getMissingDerivativeHashes(),
+                    (hash) => storage.getDerivativeAbsolutePathByHash(hash),
+                    (hash) => storage.getDerivativeRelativePathByHash(hash),
+                    (hash, tempFilePath, relativePath) => storage.storeDerivativeBlob(hash, tempFilePath, relativePath),
+                  );
+                  print('[Sync] Responder derivative blob sync completed successfully');
+                } catch (e) {
+                  print('[Sync] Responder derivative blob sync error: $e');
+                }
+              } else {
+                print('[Sync] Responder has all derivative blobs');
               }
 
               // After blob sync, continue listening for more requests
@@ -412,10 +477,22 @@ class DeviceSyncService {
             }
             print('[Sync] Processing blob request...');
             final storage = FileSystemStorage.instance;
+
+            // Try to handle as file blob first, then derivative blob
             await coordinator.handleBlobRequest(
               message,
-              (hash) => storage.getAbsolutePathByHash(hash),
-              (hash) => storage.getRelativePathByHash(hash),
+              (hash) async {
+                // Try file first, then derivative
+                final filePath = await storage.getAbsolutePathByHash(hash);
+                if (filePath != null) return filePath;
+                return await storage.getDerivativeAbsolutePathByHash(hash);
+              },
+              (hash) async {
+                // Try file first, then derivative
+                final relPath = await storage.getRelativePathByHash(hash);
+                if (relPath != null) return relPath;
+                return await storage.getDerivativeRelativePathByHash(hash);
+              },
             );
             print('[Sync] Blob request handled, ready for next sync...');
             // Don't break - keep connection alive for more syncs

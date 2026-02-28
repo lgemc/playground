@@ -72,4 +72,19 @@ class FileSystemBridge {
   Future<List<FileItem>> searchFiles(String query) async {
     return _storage.search(query);
   }
+
+  /// Check if a file has derivatives.
+  Future<bool> hasDerivatives(String fileId) async {
+    return _storage.hasDerivatives(fileId);
+  }
+
+  /// Get derivatives for a file.
+  Future<List<dynamic>> getDerivatives(String fileId) async {
+    return _storage.getDerivatives(fileId);
+  }
+
+  /// Get FileItem object for use with FileDerivativesScreen.
+  Future<FileItem?> getFileItemById(String fileId) async {
+    return getFileById(fileId);
+  }
 }

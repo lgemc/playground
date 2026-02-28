@@ -7,6 +7,8 @@ class DerivativeArtifact {
   final DateTime createdAt;
   final DateTime? completedAt;
   final String? errorMessage;
+  final String? contentHash; // SHA-256 hash for sync
+  final DateTime? deletedAt; // Soft delete support
 
   DerivativeArtifact({
     required this.id,
@@ -17,6 +19,8 @@ class DerivativeArtifact {
     required this.createdAt,
     this.completedAt,
     this.errorMessage,
+    this.contentHash,
+    this.deletedAt,
   });
 
   Map<String, dynamic> toJson() {
@@ -29,6 +33,8 @@ class DerivativeArtifact {
       'created_at': createdAt.millisecondsSinceEpoch,
       'completed_at': completedAt?.millisecondsSinceEpoch,
       'error_message': errorMessage,
+      'content_hash': contentHash,
+      'deleted_at': deletedAt?.millisecondsSinceEpoch,
     };
   }
 
@@ -44,6 +50,10 @@ class DerivativeArtifact {
           ? _parseTimestamp(json['completed_at'])
           : null,
       errorMessage: json['error_message'] as String?,
+      contentHash: json['content_hash'] as String?,
+      deletedAt: json['deleted_at'] != null
+          ? _parseTimestamp(json['deleted_at'])
+          : null,
     );
   }
 
@@ -65,6 +75,8 @@ class DerivativeArtifact {
     DateTime? createdAt,
     DateTime? completedAt,
     String? errorMessage,
+    String? contentHash,
+    DateTime? deletedAt,
   }) {
     return DerivativeArtifact(
       id: id ?? this.id,
@@ -75,6 +87,8 @@ class DerivativeArtifact {
       createdAt: createdAt ?? this.createdAt,
       completedAt: completedAt ?? this.completedAt,
       errorMessage: errorMessage ?? this.errorMessage,
+      contentHash: contentHash ?? this.contentHash,
+      deletedAt: deletedAt ?? this.deletedAt,
     );
   }
 }

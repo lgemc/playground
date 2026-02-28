@@ -81,7 +81,7 @@ void main() async {
       try {
         await CrdtDatabase.instance.init(
           'crdt_test.db',
-          11, // Bumped version to 11 for quiz soft delete support
+          12, // Bumped version to 12 for derivative sync support
           (db, version) async {
             // Create a metadata table for CRDT
             await db.execute('''
@@ -771,6 +771,27 @@ void main() async {
 
               print('[Migration] Quiz soft delete columns added!');
             }
+
+            // Migration from version 11 to 12: Add derivative sync columns
+            if (oldVersion < 12) {
+              print('[Migration] Adding derivative sync columns...');
+
+              try {
+                await db.execute('ALTER TABLE derivatives ADD COLUMN content_hash TEXT');
+                print('[Migration]   Added content_hash column');
+              } catch (e) {
+                print('[Migration]   content_hash column already exists');
+              }
+
+              try {
+                await db.execute('ALTER TABLE derivatives ADD COLUMN deleted_at INTEGER');
+                print('[Migration]   Added deleted_at column');
+              } catch (e) {
+                print('[Migration]   deleted_at column already exists');
+              }
+
+              print('[Migration] Derivative sync columns added!');
+            }
           },
         );
         print('✅ CRDT database initialized successfully!');
@@ -785,7 +806,7 @@ void main() async {
     try {
       await CrdtDatabase.instance.init(
         'crdt_main.db',
-        11, // Bumped version to 11 for quiz soft delete support
+        12, // Bumped version to 12 for derivative sync support
         (db, version) async {
           // Create a metadata table for CRDT
           await db.execute('''
@@ -1433,6 +1454,27 @@ void main() async {
             await db.execute("UPDATE quizzes SET deleted_at = ?, title = 'Deleted Quiz' WHERE title = '__DELETED__'", [DateTime.now().millisecondsSinceEpoch]);
 
             print('[Migration] Quiz soft delete columns added!');
+          }
+
+          // Migration from version 11 to 12: Add derivative sync columns
+          if (oldVersion < 12) {
+            print('[Migration] Adding derivative sync columns...');
+
+            try {
+              await db.execute('ALTER TABLE derivatives ADD COLUMN content_hash TEXT');
+              print('[Migration]   Added content_hash column');
+            } catch (e) {
+              print('[Migration]   content_hash column already exists');
+            }
+
+            try {
+              await db.execute('ALTER TABLE derivatives ADD COLUMN deleted_at INTEGER');
+              print('[Migration]   Added deleted_at column');
+            } catch (e) {
+              print('[Migration]   deleted_at column already exists');
+            }
+
+            print('[Migration] Derivative sync columns added!');
           }
         },
       );

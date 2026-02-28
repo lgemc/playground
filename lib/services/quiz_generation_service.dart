@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:math';
-import 'package:sqflite/sqflite.dart';
 import '../core/database/crdt_database.dart';
 import '../apps/lms/shared/models/reviewable_item.dart';
 import '../apps/lms/shared/models/quiz.dart';
@@ -169,9 +168,9 @@ ${jsonEncode(context)}
 Generate $count new questions at ${difficulty.name} level.
 ''';
 
-    // Use streaming to handle reasoning models
+    // Use streaming to handle reasoning models (high-tier for better quality)
     final resultBuffer = StringBuffer();
-    await for (final chunk in _autocompletion.promptStreamContentOnly(
+    await for (final chunk in _autocompletion.promptStreamContentOnlyHigh(
       prompt,
       systemPrompt: systemPrompt,
       temperature: 0.7,
@@ -265,48 +264,55 @@ Generate $count new questions at ${difficulty.name} level.
     // For different difficulty levels, prefer different question types
     final selected = <ReviewableItem>[];
 
+    // Filter out flashcards for intermediate+ (flashcards are for study, not quizzes)
+    final excludeFlashcards = difficulty != QuizDifficulty.beginner;
+    final filteredItems = excludeFlashcards
+        ? shuffled.where((item) => item.type != ReviewableType.flashcard).toList()
+        : shuffled;
+
     switch (difficulty) {
       case QuizDifficulty.beginner:
-        // Prefer flashcards, true/false, simple multiple choice
-        selected.addAll(_filterByTypes(shuffled, [
-          ReviewableType.flashcard,
+        // Include flashcards converted to questions, true/false, simple multiple choice
+        selected.addAll(_filterByTypes(filteredItems, [
           ReviewableType.trueFalse,
           ReviewableType.multipleChoice,
+          ReviewableType.flashcard,
         ]));
         break;
 
       case QuizDifficulty.intermediate:
-        // Mix of question types, avoid flashcards
-        selected.addAll(_filterByTypes(shuffled, [
+        // Mix of question types - NO flashcards
+        selected.addAll(_filterByTypes(filteredItems, [
           ReviewableType.multipleChoice,
+          ReviewableType.trueFalse,
           ReviewableType.fillInBlank,
           ReviewableType.shortAnswer,
         ]));
         break;
 
       case QuizDifficulty.advanced:
-        // Prefer short answer, fill-in-blank, procedures
-        selected.addAll(_filterByTypes(shuffled, [
+        // Prefer challenging types - NO flashcards
+        selected.addAll(_filterByTypes(filteredItems, [
           ReviewableType.shortAnswer,
           ReviewableType.fillInBlank,
-          ReviewableType.procedure,
           ReviewableType.multipleChoice,
+          ReviewableType.trueFalse,
         ]));
         break;
 
       case QuizDifficulty.expert:
-        // Most challenging: procedures, summaries, complex questions
-        selected.addAll(_filterByTypes(shuffled, [
-          ReviewableType.procedure,
-          ReviewableType.summary,
+        // Most challenging - NO flashcards
+        selected.addAll(_filterByTypes(filteredItems, [
           ReviewableType.shortAnswer,
+          ReviewableType.fillInBlank,
+          ReviewableType.multipleChoice,
         ]));
         break;
     }
 
-    // If we don't have enough, add more from shuffled list
+    // If we don't have enough, add more from filtered list (still excluding flashcards if needed)
     if (selected.length < count) {
-      for (final item in shuffled) {
+      for (final item in filteredItems) {
         if (!selected.contains(item) && selected.length < count) {
           selected.add(item);
         }
@@ -351,6 +357,7 @@ Generate $count new questions at ${difficulty.name} level.
         break;
       case ReviewableType.procedure:
       case ReviewableType.summary:
+        // Legacy types - no longer generated but kept for backward compatibility
         basePoints = 5;
         break;
     }
@@ -386,9 +393,9 @@ Difficulty: ${difficulty.name}
 
 Generate a quiz title.''';
 
-    // Use streaming to handle reasoning models
+    // Use streaming to handle reasoning models (high-tier for better quality)
     final resultBuffer = StringBuffer();
-    await for (final chunk in _autocompletion.promptStreamContentOnly(
+    await for (final chunk in _autocompletion.promptStreamContentOnlyHigh(
       prompt,
       systemPrompt: systemPrompt,
       temperature: 0.7,

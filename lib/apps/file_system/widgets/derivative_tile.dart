@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../models/derivative_artifact.dart';
@@ -5,7 +6,7 @@ import '../services/file_system_storage.dart';
 import '../../../models/transcript.dart';
 import '../../video_viewer/screens/transcript_viewer_screen.dart';
 
-class DerivativeTile extends StatelessWidget {
+class DerivativeTile extends StatefulWidget {
   final DerivativeArtifact derivative;
   final VoidCallback onDelete;
   final Future<void> Function()? onApplyRename;
@@ -16,6 +17,38 @@ class DerivativeTile extends StatelessWidget {
     required this.onDelete,
     this.onApplyRename,
   });
+
+  @override
+  State<DerivativeTile> createState() => _DerivativeTileState();
+}
+
+class _DerivativeTileState extends State<DerivativeTile> {
+  bool _fileExists = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkFileExists();
+  }
+
+  void _checkFileExists() {
+    // Reconstruct local path (derivative.derivativePath might be from another device)
+    try {
+      final storage = FileSystemStorage.instance;
+      final fileName = '${widget.derivative.id}.md';
+      final localPath = '${storage.derivativesDir.path}/$fileName';
+      final file = File(localPath);
+
+      setState(() {
+        _fileExists = file.existsSync();
+      });
+    } catch (e) {
+      // Storage not initialized yet
+      setState(() {
+        _fileExists = false;
+      });
+    }
+  }
 
   IconData _getIconForType(String type) {
     switch (type) {
@@ -74,52 +107,76 @@ class DerivativeTile extends StatelessWidget {
   }
 
   Future<void> _openDerivative(BuildContext context) async {
-    if (derivative.status != 'completed') {
+    if (widget.derivative.status != 'completed') {
       return;
     }
 
-    // Get the content
-    final content = await FileSystemStorage.instance
-        .getDerivativeContent(derivative.id);
-
-    if (context.mounted) {
-      // For auto_title, show apply rename dialog instead of viewing
-      if (derivative.type == 'auto_title' && onApplyRename != null) {
-        _showApplyRenameDialog(context, content);
+    // Check if file exists first
+    if (!_fileExists) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Derivative file not downloaded. Please sync to download.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
       }
-      // For transcript, show special viewer with segments
-      else if (derivative.type == 'transcript') {
-        try {
-          final transcript = Transcript.fromJsonString(content);
+      return;
+    }
+
+    try {
+      // Get the content
+      final content = await FileSystemStorage.instance
+          .getDerivativeContent(widget.derivative.id);
+
+      if (context.mounted) {
+        // For auto_title, show apply rename dialog instead of viewing
+        if (widget.derivative.type == 'auto_title' && widget.onApplyRename != null) {
+          _showApplyRenameDialog(context, content);
+        }
+        // For transcript, show special viewer with segments
+        else if (widget.derivative.type == 'transcript') {
+          try {
+            final transcript = Transcript.fromJsonString(content);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => TranscriptViewerScreen(
+                  transcript: transcript,
+                  fileName: transcript.sourceFile ?? 'Unknown',
+                ),
+              ),
+            );
+          } catch (e) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Failed to load transcript: $e')),
+            );
+          }
+        }
+        // Default: display markdown content
+        else {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => TranscriptViewerScreen(
-                transcript: transcript,
-                fileName: transcript.sourceFile ?? 'Unknown',
+              builder: (context) => Scaffold(
+                appBar: AppBar(
+                  title: Text(widget.derivative.type.toUpperCase()),
+                ),
+                body: Markdown(
+                  data: content,
+                  selectable: true,
+                ),
               ),
             ),
-          );
-        } catch (e) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to load transcript: $e')),
           );
         }
       }
-      // Default: display markdown content
-      else {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => Scaffold(
-              appBar: AppBar(
-                title: Text(derivative.type.toUpperCase()),
-              ),
-              body: Markdown(
-                data: content,
-                selectable: true,
-              ),
-            ),
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to open derivative: $e'),
+            duration: const Duration(seconds: 5),
           ),
         );
       }
@@ -196,8 +253,8 @@ class DerivativeTile extends StatelessWidget {
         ),
       );
 
-      if (confirmed == true && onApplyRename != null) {
-        await onApplyRename!();
+      if (confirmed == true && widget.onApplyRename != null) {
+        await widget.onApplyRename!();
       }
     }
   }
@@ -205,7 +262,7 @@ class DerivativeTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Dismissible(
-      key: Key(derivative.id),
+      key: Key(widget.derivative.id),
       direction: DismissDirection.endToStart,
       background: Container(
         color: Colors.red,
@@ -222,7 +279,7 @@ class DerivativeTile extends StatelessWidget {
           builder: (context) => AlertDialog(
             title: const Text('Delete Derivative'),
             content: Text(
-              'Are you sure you want to delete this ${derivative.type}?',
+              'Are you sure you want to delete this ${widget.derivative.type}?',
             ),
             actions: [
               TextButton(
@@ -241,34 +298,60 @@ class DerivativeTile extends StatelessWidget {
         );
       },
       onDismissed: (direction) {
-        onDelete();
+        widget.onDelete();
       },
       child: Card(
         child: ListTile(
           leading: Icon(
-            _getIconForType(derivative.type),
-            color: _getColorForStatus(derivative.status),
+            _getIconForType(widget.derivative.type),
+            color: _getColorForStatus(widget.derivative.status),
           ),
           title: Text(
-            derivative.type.toUpperCase(),
+            widget.derivative.type.toUpperCase(),
             style: const TextStyle(
               fontWeight: FontWeight.bold,
             ),
           ),
-          subtitle: derivative.status == 'failed'
+          subtitle: widget.derivative.status == 'failed'
               ? Text(
-                  derivative.errorMessage ?? 'Unknown error',
+                  widget.derivative.errorMessage ?? 'Unknown error',
                   style: const TextStyle(color: Colors.red),
                 )
-              : Text(
-                  'Created ${_formatDate(derivative.createdAt)}',
-                ),
-          trailing: _buildStatusWidget(derivative.status),
+              : _fileExists
+                  ? Text('Created ${_formatDate(widget.derivative.createdAt)}')
+                  : const Text(
+                      'Not downloaded - sync to download',
+                      style: TextStyle(color: Colors.orange),
+                    ),
+          trailing: _buildTrailingWidget(context),
           onTap: () => _openDerivative(context),
-          enabled: derivative.status == 'completed',
+          enabled: widget.derivative.status == 'completed' && _fileExists,
         ),
       ),
     );
+  }
+
+  Widget _buildTrailingWidget(BuildContext context) {
+    // Show download button if file is missing
+    if (widget.derivative.status == 'completed' && !_fileExists) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.cloud_download, color: Colors.orange),
+          const SizedBox(width: 8),
+          Text(
+            'SYNC NEEDED',
+            style: TextStyle(
+              color: Colors.orange.shade700,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return _buildStatusWidget(widget.derivative.status);
   }
 
   String _formatDate(DateTime date) {

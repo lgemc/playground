@@ -23,6 +23,13 @@ class FileSystemStorage {
     return _storageDir!;
   }
 
+  Directory get derivativesDir {
+    if (_derivativesDir == null) {
+      throw StateError('FileSystemStorage not initialized. Call init() first.');
+    }
+    return _derivativesDir!;
+  }
+
   /// Compute SHA-256 hash of a file's content
   Future<String> _computeFileHash(File file) async {
     final bytes = await file.readAsBytes();
@@ -79,7 +86,9 @@ class FileSystemStorage {
         status TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         completed_at INTEGER,
-        error_message TEXT
+        error_message TEXT,
+        content_hash TEXT,
+        deleted_at INTEGER
       )
     ''');
 
@@ -519,11 +528,6 @@ class FileSystemStorage {
       [folderPath],
     );
 
-    print('[FileSystem] getFilesInFolder("$folderPath") returned ${results.length} files');
-    if (results.isNotEmpty) {
-      print('[FileSystem] Files: ${results.map((r) => r['name']).toList()}');
-    }
-
     return results.map((m) => FileItem.fromMap(m)).toList();
   }
 
@@ -538,16 +542,12 @@ class FileSystemStorage {
       [folderPath],
     );
 
-    final folders = results.map((row) {
+    return results.map((row) {
       return FolderItem(
         name: row['name'] as String,
         path: row['path'] as String,
       );
     }).toList();
-
-    print('[FileSystem] getFoldersInPath("$folderPath") found ${folders.length} folders: ${folders.map((f) => f.name).toList()}');
-
-    return folders;
   }
 
   Future<List<FileItem>> getFavorites() async {
@@ -612,16 +612,32 @@ class FileSystemStorage {
   // === Derivative Operations ===
 
   Future<List<DerivativeArtifact>> getDerivatives(String fileId) async {
-    final results = await CrdtDatabase.instance.query(
-      '''
-      SELECT * FROM derivatives
-      WHERE file_id = ? AND is_deleted = 0
-      ORDER BY created_at DESC
-      ''',
-      [fileId],
-    );
+    try {
+      // Try with deleted_at column (new schema)
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE file_id = ? AND deleted_at IS NULL
+        ORDER BY created_at DESC
+        ''',
+        [fileId],
+      );
 
-    return results.map((m) => DerivativeArtifact.fromJson(m)).toList();
+      return results.map((m) => DerivativeArtifact.fromJson(m)).toList();
+    } catch (e) {
+      // Fall back to old schema without deleted_at column
+      print('[FileSystem] Using old schema (no deleted_at column): $e');
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE file_id = ?
+        ORDER BY created_at DESC
+        ''',
+        [fileId],
+      );
+
+      return results.map((m) => DerivativeArtifact.fromJson(m)).toList();
+    }
   }
 
   Future<DerivativeArtifact> createDerivative(
@@ -675,6 +691,17 @@ class FileSystemStorage {
       if (status == 'completed') {
         setParts.add('completed_at = ?');
         values.add(DateTime.now().millisecondsSinceEpoch);
+
+        // Compute and store content hash for sync (if column exists)
+        final derivative = await getDerivative(id);
+        if (derivative != null) {
+          final file = File(derivative.derivativePath);
+          if (file.existsSync()) {
+            final hash = await _computeFileHash(file);
+            setParts.add('content_hash = ?');
+            values.add(hash);
+          }
+        }
       }
     }
 
@@ -685,48 +712,85 @@ class FileSystemStorage {
 
     values.add(id); // for WHERE clause
 
-    await CrdtDatabase.instance.execute(
-      '''
-      UPDATE derivatives
-      SET ${setParts.join(', ')}
-      WHERE id = ?
-      ''',
-      values,
-    );
+    try {
+      await CrdtDatabase.instance.execute(
+        '''
+        UPDATE derivatives
+        SET ${setParts.join(', ')}
+        WHERE id = ?
+        ''',
+        values,
+      );
+    } catch (e) {
+      // If update fails (likely due to content_hash column not existing),
+      // retry without the hash
+      if (setParts.contains('content_hash = ?')) {
+        print('[FileSystem] Retrying update without content_hash (old schema)');
+        setParts.removeWhere((s) => s == 'content_hash = ?');
+        values.removeAt(values.length - 2); // Remove hash value (last before id)
+
+        await CrdtDatabase.instance.execute(
+          '''
+          UPDATE derivatives
+          SET ${setParts.join(', ')}
+          WHERE id = ?
+          ''',
+          values,
+        );
+      } else {
+        rethrow;
+      }
+    }
   }
 
   Future<void> deleteDerivative(String id) async {
-    // Get derivative info
-    final results = await CrdtDatabase.instance.query(
-      'SELECT * FROM derivatives WHERE id = ?',
-      [id],
-    );
+    try {
+      // Soft delete - mark as deleted instead of removing
+      // This allows sync to propagate deletions across devices
+      await CrdtDatabase.instance.execute(
+        'UPDATE derivatives SET deleted_at = ? WHERE id = ?',
+        [DateTime.now().millisecondsSinceEpoch, id],
+      );
+    } catch (e) {
+      // Fall back to hard delete for old schema
+      print('[FileSystem] Using hard delete (old schema): $e');
+      final derivative = await getDerivative(id);
+      if (derivative != null) {
+        final file = File(derivative.derivativePath);
+        if (file.existsSync()) {
+          await file.delete();
+        }
+      }
 
-    if (results.isEmpty) return;
-
-    final derivative = DerivativeArtifact.fromJson(results.first);
-
-    // Delete file if it exists
-    final file = File(derivative.derivativePath);
-    if (file.existsSync()) {
-      await file.delete();
+      await CrdtDatabase.instance.execute(
+        'DELETE FROM derivatives WHERE id = ?',
+        [id],
+      );
     }
 
-    // Delete from database
-    await CrdtDatabase.instance.execute(
-      'DELETE FROM derivatives WHERE id = ?',
-      [id],
-    );
+    // Optionally delete the actual file (can be kept for recovery)
+    // For now, keep files to allow undo/recovery
   }
 
   Future<bool> hasDerivatives(String fileId) async {
-    final result = await CrdtDatabase.instance.query(
-      'SELECT COUNT(*) as count FROM derivatives WHERE file_id = ? AND is_deleted = 0',
-      [fileId],
-    );
+    try {
+      final result = await CrdtDatabase.instance.query(
+        'SELECT COUNT(*) as count FROM derivatives WHERE file_id = ? AND deleted_at IS NULL',
+        [fileId],
+      );
 
-    final count = result.first['count'] as int;
-    return count > 0;
+      final count = result.first['count'] as int;
+      return count > 0;
+    } catch (e) {
+      // Fall back to old schema
+      final result = await CrdtDatabase.instance.query(
+        'SELECT COUNT(*) as count FROM derivatives WHERE file_id = ?',
+        [fileId],
+      );
+
+      final count = result.first['count'] as int;
+      return count > 0;
+    }
   }
 
   Future<DerivativeArtifact?> getDerivative(String id) async {
@@ -745,9 +809,17 @@ class FileSystemStorage {
       throw Exception('Derivative not found');
     }
 
-    final file = File(derivative.derivativePath);
+    // Reconstruct local path
+    final fileName = '${derivative.id}.md';
+    final localPath = p.join(_derivativesDir!.path, fileName);
+    final file = File(localPath);
+
     if (!file.existsSync()) {
-      return '';
+      throw Exception(
+        'Derivative file not found on disk. This derivative may have been '
+        'synced from another device but the file content was not transferred. '
+        'Try regenerating the derivative or enabling file content sync.'
+      );
     }
 
     return await file.readAsString();
@@ -1050,7 +1122,119 @@ class FileSystemStorage {
 
   /// Store blob from a temp file path (avoids loading full file into RAM)
   Future<void> storeBlobByPath(String hash, String tempFilePath, String relativePath) async {
-    // Find ALL files with this hash (there might be duplicates)
+    final tempFile = File(tempFilePath);
+    if (!tempFile.existsSync()) {
+      print('[FileSystem] ❌ Temp file not found: $tempFilePath');
+      throw Exception('Temp file not found: $tempFilePath');
+    }
+
+    // Verify hash of the received file
+    final actualHash = await _computeFileHash(tempFile);
+
+    if (actualHash != hash) {
+      print('[FileSystem] ⚠️ Hash mismatch: expected $hash, got $actualHash');
+      print('[FileSystem] Attempting to regenerate stale hashes...');
+
+      // Find files with the expected hash (stale)
+      final staleResults = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM files
+        WHERE content_hash = ? AND deleted_at IS NULL
+        ''',
+        [hash],
+      );
+
+      if (staleResults.isNotEmpty) {
+        print('[FileSystem] Found ${staleResults.length} file(s) with stale hash in database');
+
+        // Check if any local files match the actual hash
+        bool regenerated = false;
+        List<String> updatedFileIds = [];
+
+        for (final fileMap in staleResults) {
+          final fileItem = FileItem.fromMap(fileMap);
+          final localFile = File(p.join(storageDir.path, fileItem.relativePath));
+
+          if (localFile.existsSync()) {
+            // File exists locally - verify it matches the actual hash
+            final localHash = await _computeFileHash(localFile);
+            if (localHash == actualHash) {
+              print('[FileSystem] ✓ Local file ${fileItem.relativePath} matches actual hash!');
+              print('[FileSystem] Updating hash in database: $hash → $actualHash');
+              await CrdtDatabase.instance.execute(
+                'UPDATE files SET content_hash = ?, updated_at = ? WHERE id = ?',
+                [actualHash, DateTime.now().millisecondsSinceEpoch, fileItem.id],
+              );
+              updatedFileIds.add(fileItem.id);
+              regenerated = true;
+            }
+          } else {
+            // File doesn't exist locally - this is a sync receive scenario
+            // Accept the blob and update hash to match what was received
+            print('[FileSystem] ✓ File ${fileItem.relativePath} missing locally, accepting blob with actual hash');
+            print('[FileSystem] Updating hash in database: $hash → $actualHash');
+            await CrdtDatabase.instance.execute(
+              'UPDATE files SET content_hash = ?, updated_at = ? WHERE id = ?',
+              [actualHash, DateTime.now().millisecondsSinceEpoch, fileItem.id],
+            );
+            updatedFileIds.add(fileItem.id);
+            regenerated = true;
+          }
+        }
+
+        if (regenerated) {
+          print('[FileSystem] Hash(es) regenerated successfully for ${updatedFileIds.length} file(s)');
+
+          // Store blob to the updated files
+          for (final fileMap in staleResults) {
+            final fileItem = FileItem.fromMap(fileMap);
+            if (updatedFileIds.contains(fileItem.id)) {
+              final filePath = p.join(storageDir.path, fileItem.relativePath);
+              final file = File(filePath);
+
+              await file.parent.create(recursive: true);
+              await tempFile.copy(filePath);
+              print('[FileSystem]   → Stored to: ${fileItem.relativePath}');
+            }
+          }
+
+          print('[FileSystem] ✅ Blob stored to ${updatedFileIds.length} file(s) with regenerated hash');
+          return;
+        }
+      }
+
+      // Check if we have files expecting the actual hash
+      final actualHashResults = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM files
+        WHERE content_hash = ? AND deleted_at IS NULL
+        ''',
+        [actualHash],
+      );
+
+      if (actualHashResults.isNotEmpty) {
+        print('[FileSystem] Found ${actualHashResults.length} file(s) expecting actual hash $actualHash');
+
+        for (final fileMap in actualHashResults) {
+          final fileItem = FileItem.fromMap(fileMap);
+          final filePath = p.join(storageDir.path, fileItem.relativePath);
+          final file = File(filePath);
+
+          await file.parent.create(recursive: true);
+          await tempFile.copy(filePath);
+          print('[FileSystem]   → Stored to: ${fileItem.relativePath}');
+        }
+
+        print('[FileSystem] ✅ Blob stored to ${actualHashResults.length} file(s) using actual hash');
+        return;
+      }
+
+      // No matches found
+      await tempFile.delete();
+      throw Exception('Hash mismatch: expected $hash, got $actualHash. No matching files found.');
+    }
+
+    // Hash matches - store blob normally
     final results = await CrdtDatabase.instance.query(
       '''
       SELECT * FROM files
@@ -1066,15 +1250,6 @@ class FileSystemStorage {
       return;
     }
 
-    // Verify hash of the assembled temp file
-    final tempFile = File(tempFilePath);
-    final actualHash = await _computeFileHash(tempFile);
-
-    if (actualHash != hash) {
-      throw Exception('Hash mismatch: expected $hash, got $actualHash');
-    }
-
-    // Store blob to ALL files with this hash
     for (final fileMap in results) {
       final fileItem = FileItem.fromMap(fileMap);
       final filePath = p.join(storageDir.path, fileItem.relativePath);
@@ -1083,10 +1258,7 @@ class FileSystemStorage {
       final fileSize = await tempFile.length();
       print('[FileSystem]   → Storing to: ${fileItem.relativePath} ($fileSize bytes)');
 
-      // Create parent directories
       await file.parent.create(recursive: true);
-
-      // Copy the verified blob
       await tempFile.copy(filePath);
     }
 
@@ -1104,5 +1276,271 @@ class FileSystemStorage {
 
     print('[FileSystem] getMissingBlobHashes: ${files.length} files need content, ${hashes.length} unique hashes');
     return hashes;
+  }
+
+  // === Derivative Blob Sync Methods ===
+
+  /// Regenerate missing content hashes for completed derivatives
+  Future<void> regenerateDerivativeHashes() async {
+    print('[FileSystem] Checking for derivatives without content hashes...');
+
+    List<Map<String, dynamic>> results;
+    try {
+      results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE status = 'completed' AND deleted_at IS NULL AND content_hash IS NULL
+        ''',
+        [],
+      );
+    } catch (e) {
+      // Old schema without content_hash column
+      print('[FileSystem] content_hash column not available, skipping regeneration');
+      return;
+    }
+
+    if (results.isEmpty) {
+      print('[FileSystem] All derivatives have content hashes');
+      return;
+    }
+
+    print('[FileSystem] Found ${results.length} derivative(s) without content hash, generating...');
+
+    int regenerated = 0;
+    for (final derivativeMap in results) {
+      final derivative = DerivativeArtifact.fromJson(derivativeMap);
+
+      // Reconstruct local path
+      final fileName = '${derivative.id}.md';
+      final localPath = p.join(_derivativesDir!.path, fileName);
+      final file = File(localPath);
+
+      if (file.existsSync()) {
+        try {
+          final hash = await _computeFileHash(file);
+          await CrdtDatabase.instance.execute(
+            'UPDATE derivatives SET content_hash = ? WHERE id = ?',
+            [hash, derivative.id],
+          );
+          print('[FileSystem]   ✓ Generated hash for ${derivative.type} (${derivative.id})');
+          regenerated++;
+        } catch (e) {
+          print('[FileSystem]   ✗ Failed to generate hash for ${derivative.id}: $e');
+        }
+      } else {
+        print('[FileSystem]   ⚠️ File missing for ${derivative.id}, skipping');
+      }
+    }
+
+    print('[FileSystem] ✅ Regenerated hashes for $regenerated derivative(s)');
+  }
+
+  /// Get derivative by content hash
+  Future<DerivativeArtifact?> getDerivativeByHash(String hash) async {
+    try {
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE content_hash = ? AND deleted_at IS NULL
+        LIMIT 1
+        ''',
+        [hash],
+      );
+
+      return results.isNotEmpty ? DerivativeArtifact.fromJson(results.first) : null;
+    } catch (e) {
+      // Fall back to old schema
+      final results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE content_hash = ?
+        LIMIT 1
+        ''',
+        [hash],
+      );
+
+      return results.isNotEmpty ? DerivativeArtifact.fromJson(results.first) : null;
+    }
+  }
+
+  /// Get absolute path for derivative by hash (for blob sending)
+  Future<String?> getDerivativeAbsolutePathByHash(String hash) async {
+    final derivative = await getDerivativeByHash(hash);
+    if (derivative == null) return null;
+
+    // Reconstruct local path
+    final fileName = '${derivative.id}.md';
+    final localPath = p.join(_derivativesDir!.path, fileName);
+    final file = File(localPath);
+
+    if (!file.existsSync()) return null;
+
+    print('[FileSystem] getDerivativeAbsolutePathByHash($hash): Found at $localPath');
+    return localPath;
+  }
+
+  /// Get relative path for derivative by hash (path within derivatives directory)
+  Future<String?> getDerivativeRelativePathByHash(String hash) async {
+    final derivative = await getDerivativeByHash(hash);
+    if (derivative == null) return null;
+
+    // Return the derivative ID as relative path (can reconstruct full path)
+    return '${derivative.id}.md';
+  }
+
+  /// Get list of derivatives that need content (metadata exists but file missing)
+  Future<List<DerivativeArtifact>> getDerivativesNeedingContent() async {
+    List<Map<String, dynamic>> results;
+
+    try {
+      results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE status = 'completed' AND deleted_at IS NULL AND content_hash IS NOT NULL
+        ORDER BY created_at DESC
+        ''',
+        [],
+      );
+    } catch (e) {
+      // Fall back to old schema
+      results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE status = 'completed' AND content_hash IS NOT NULL
+        ORDER BY created_at DESC
+        ''',
+        [],
+      );
+    }
+
+    print('[FileSystem] getDerivativesNeedingContent: checking ${results.length} derivatives with hashes');
+
+    final derivatives = results.map((m) => DerivativeArtifact.fromJson(m)).toList();
+
+    // Filter to only those where file is missing
+    final needingContent = <DerivativeArtifact>[];
+    for (final derivative in derivatives) {
+      // Reconstruct local path (derivative.derivativePath might be from another device)
+      final fileName = '${derivative.id}.md';
+      final localPath = p.join(_derivativesDir!.path, fileName);
+      final file = File(localPath);
+
+      if (!file.existsSync()) {
+        print('[FileSystem]   Missing: ${derivative.type} for file ${derivative.fileId} (hash: ${derivative.contentHash})');
+        needingContent.add(derivative);
+      }
+    }
+
+    print('[FileSystem] Total derivatives needing content: ${needingContent.length}');
+    return needingContent;
+  }
+
+  /// Get list of derivative hashes we need
+  Future<List<String>> getMissingDerivativeHashes() async {
+    final derivatives = await getDerivativesNeedingContent();
+    final hashes = derivatives
+        .where((d) => d.contentHash != null)
+        .map((d) => d.contentHash!)
+        .toSet()
+        .toList();
+
+    print('[FileSystem] getMissingDerivativeHashes: ${derivatives.length} derivatives need content, ${hashes.length} unique hashes');
+    return hashes;
+  }
+
+  /// Store a derivative blob from temp file
+  Future<void> storeDerivativeBlob(String hash, String tempFilePath, String relativePath) async {
+    print('[FileSystem] storeDerivativeBlob called: hash=$hash, relativePath=$relativePath');
+
+    final tempFile = File(tempFilePath);
+    if (!tempFile.existsSync()) {
+      print('[FileSystem] ❌ Temp file not found: $tempFilePath');
+      throw Exception('Temp file not found: $tempFilePath');
+    }
+
+    // Verify hash
+    final actualHash = await _computeFileHash(tempFile);
+    if (actualHash != hash) {
+      await tempFile.delete();
+      throw Exception('Hash mismatch: expected $hash, got $actualHash');
+    }
+
+    // Find all derivatives with this hash
+    List<Map<String, dynamic>> results;
+    try {
+      results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE content_hash = ? AND deleted_at IS NULL
+        ''',
+        [hash],
+      );
+    } catch (e) {
+      // Fall back to old schema
+      results = await CrdtDatabase.instance.query(
+        '''
+        SELECT * FROM derivatives
+        WHERE content_hash = ?
+        ''',
+        [hash],
+      );
+    }
+
+    print('[FileSystem] Storing derivative blob for hash $hash to ${results.length} derivative(s)');
+
+    if (results.isEmpty) {
+      print('[FileSystem] ⚠️ No derivatives found with hash $hash, skipping');
+      return;
+    }
+
+    // Store blob to ALL derivatives with this hash
+    for (final derivativeMap in results) {
+      final derivative = DerivativeArtifact.fromJson(derivativeMap);
+
+      // Reconstruct path using local derivatives directory
+      // The derivative path in DB might be from another device
+      final fileName = '${derivative.id}.md';
+      final localPath = p.join(_derivativesDir!.path, fileName);
+      final file = File(localPath);
+
+      final fileSize = await tempFile.length();
+      print('[FileSystem]   → Storing to: $localPath ($fileSize bytes)');
+
+      // Create parent directories
+      await file.parent.create(recursive: true);
+
+      // Copy the verified blob
+      await tempFile.copy(localPath);
+    }
+
+    print('[FileSystem] ✅ Derivative blob stored and verified to ${results.length} location(s)');
+  }
+
+  /// Get all local derivatives with content (for sending to remote device)
+  Future<List<String>> getAllDerivativeHashes() async {
+    List<Map<String, dynamic>> results;
+
+    try {
+      results = await CrdtDatabase.instance.query(
+        '''
+        SELECT DISTINCT content_hash FROM derivatives
+        WHERE content_hash IS NOT NULL AND deleted_at IS NULL AND status = 'completed'
+        ''',
+        [],
+      );
+    } catch (e) {
+      // Fall back to old schema
+      results = await CrdtDatabase.instance.query(
+        '''
+        SELECT DISTINCT content_hash FROM derivatives
+        WHERE content_hash IS NOT NULL AND status = 'completed'
+        ''',
+        [],
+      );
+    }
+
+    return results
+        .map((r) => r['content_hash'] as String)
+        .toList();
   }
 }

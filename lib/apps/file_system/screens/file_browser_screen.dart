@@ -19,6 +19,7 @@ import '../../../services/share_service.dart';
 import '../../../services/share_content.dart';
 import '../../../services/shared_files_service.dart';
 import '../../../services/generators/auto_title_generator.dart';
+import '../../../services/generators/readme_generator.dart';
 import '../../../services/derivative_service.dart';
 import '../../../core/database/crdt_database.dart';
 
@@ -903,6 +904,93 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
+  Future<void> _generateReadme() async {
+    try {
+      // Show loading indicator
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Generating README.md...'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+
+      // Get the physical folder path
+      final folderPath = FileSystemStorage.instance.storageDir.path;
+      final currentFolderPath = _currentPath.isEmpty
+          ? folderPath
+          : '$folderPath/$_currentPath';
+
+      // Get derivatives path
+      final derivativesPath = await _getDerivativesPath();
+
+      // Generate README
+      final readme = await ReadmeGeneratorService.instance.generateReadme(
+        currentFolderPath,
+        derivativesPath,
+      );
+
+      // Check if README.md already exists and delete it first
+      final existingReadme = await FileSystemStorage.instance.getFilesInFolder(_currentPath);
+      for (final file in existingReadme) {
+        if (file.name == 'README.md') {
+          await FileSystemStorage.instance.deleteFile(file.id);
+          break;
+        }
+      }
+
+      // Write README.md to a temp file with unique name to avoid conflicts
+      final tempDir = Directory.systemTemp;
+      final uniqueName = 'README_temp_${DateTime.now().millisecondsSinceEpoch}.md';
+      final tempFile = File('${tempDir.path}/$uniqueName');
+      await tempFile.writeAsString(readme);
+
+      // Rename to README.md
+      final renamedTemp = File('${tempDir.path}/README.md');
+      if (await renamedTemp.exists()) {
+        await renamedTemp.delete();
+      }
+      await tempFile.rename(renamedTemp.path);
+
+      // Add the file to the storage (which handles database entries)
+      await FileSystemStorage.instance.addFile(renamedTemp, _currentPath);
+
+      // Clean up temp file
+      try {
+        await renamedTemp.delete();
+      } catch (_) {
+        // Ignore cleanup errors
+      }
+
+      // Reload contents
+      await _loadContents();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('README.md generated successfully'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error generating README: $e')),
+        );
+      }
+    }
+  }
+
+  Future<String> _getDerivativesPath() async {
+    // Get the derivatives directory from FileSystemStorage
+    final storage = FileSystemStorage.instance;
+    // The derivatives path is in data/file_system/derivatives
+    final appDir = Directory(storage.storageDir.path).parent;
+    return '${appDir.path}/derivatives';
+  }
+
   Widget _buildBrowserTab() {
     return Column(
       children: [
@@ -1000,6 +1088,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                 _queueVideosForTranscription();
               } else if (value == 'queue_summaries') {
                 _queueFilesForSummary();
+              } else if (value == 'generate_readme') {
+                _generateReadme();
               }
             },
             itemBuilder: (context) => [
@@ -1020,6 +1110,16 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                     Icon(Icons.summarize),
                     SizedBox(width: 12),
                     Text('Queue files for summary'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'generate_readme',
+                child: Row(
+                  children: [
+                    Icon(Icons.description),
+                    SizedBox(width: 12),
+                    Text('Generate README.md'),
                   ],
                 ),
               ),

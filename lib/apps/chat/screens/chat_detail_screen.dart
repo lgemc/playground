@@ -59,6 +59,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       eventTypes: ['chat:title_generated'],
       callback: (event) async {
         if (event.metadata['chatId'] == _currentChat.id) {
+          if (!mounted) return;
+
           setState(() {
             _currentChat = _currentChat.copyWith(
               title: event.metadata['title'] as String,
@@ -73,6 +75,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   Future<void> _loadMessages() async {
     final messages = await ChatStorage.instance.getMessages(widget.chat.id);
+
+    if (!mounted) return;
+
     setState(() {
       _messages.clear();
       _messages.addAll(messages);
@@ -109,6 +114,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     await ChatStorage.instance.createMessage(message);
     _messageController.clear();
 
+    if (!mounted) return;
+
     setState(() {
       _messages.add(message);
       _hasUserSentMessage = true;
@@ -117,6 +124,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     // Update chat's updatedAt timestamp
     final updatedChat = _currentChat.copyWith(updatedAt: DateTime.now());
     await ChatStorage.instance.updateChat(updatedChat);
+
+    if (!mounted) return;
+
     setState(() {
       _currentChat = updatedChat;
     });
@@ -188,6 +198,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   Future<void> _generateAIResponse() async {
+    if (!mounted) return;
+
     setState(() {
       _isGeneratingResponse = true;
     });
@@ -201,6 +213,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       isUser: false,
       createdAt: DateTime.now(),
     );
+
+    if (!mounted) return;
 
     setState(() {
       _messages.add(aiMessage);
@@ -216,6 +230,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           content: 'AI service not configured. Please set your LLM API key in Settings.',
         );
         await ChatStorage.instance.createMessage(errorMessage);
+
+        if (!mounted) return;
+
         setState(() {
           _messages[_messages.length - 1] = errorMessage;
           _isGeneratingResponse = false;
@@ -248,6 +265,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             if (event is ContentChunk) {
               buffer.write(event.content);
 
+              if (!mounted) return;
+
               // Update the message in real-time
               final updatedMessage =
                   aiMessage.copyWith(content: buffer.toString());
@@ -269,6 +288,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
             final finalMessage = aiMessage.copyWith(content: finalContent);
             await ChatStorage.instance.createMessage(finalMessage);
+
+            if (!mounted) return;
 
             setState(() {
               _messages[_messages.length - 1] = finalMessage;
@@ -309,6 +330,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               content: jsonEncode(result.toJson()),
             ));
 
+            if (!mounted) return;
+
             // Update UI to show tool execution
             final toolStatusMessage = aiMessage.copyWith(
               content:
@@ -325,6 +348,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
         final updatedChat = _currentChat.copyWith(updatedAt: DateTime.now());
         await ChatStorage.instance.updateChat(updatedChat);
+
+        if (!mounted) return;
+
         setState(() {
           _currentChat = updatedChat;
         });
@@ -335,12 +361,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           content: 'Error generating AI response: ${e.toString()}',
         );
         await ChatStorage.instance.createMessage(errorMessage);
+
+        if (!mounted) return;
+
         setState(() {
           _messages[_messages.length - 1] = errorMessage;
           _isGeneratingResponse = false;
         });
       }
     } catch (e) {
+      if (!mounted) return;
+
       setState(() {
         _isGeneratingResponse = false;
       });

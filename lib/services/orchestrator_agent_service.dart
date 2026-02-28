@@ -8,7 +8,7 @@ import '../apps/lms/shared/models/lesson_sub_section.dart';
 import '../apps/lms/shared/models/activity.dart';
 import '../apps/file_system/services/file_system_storage.dart';
 
-/// Simple message storage
+/// Message storage for display purposes
 class AssistantMessage {
   final String content;
   final DateTime timestamp;
@@ -19,6 +19,14 @@ class AssistantMessage {
     required this.timestamp,
     required this.isUser,
   });
+
+  factory AssistantMessage.fromChatMessage(ChatMessage msg) {
+    return AssistantMessage(
+      content: msg.content,
+      timestamp: DateTime.now(),
+      isUser: msg.role == MessageRole.user,
+    );
+  }
 }
 
 /// Events that can be streamed from the agent
@@ -49,10 +57,8 @@ class ToolCallStartEvent extends AgentEvent {
         return '📄 Creating subsection';
       case 'create_activity':
         return '🎯 Creating activity';
-      case 'list_folders':
-        return '📁 Listing folders';
-      case 'list_files':
-        return '📂 Listing files';
+      case 'ls':
+        return '📂 Listing directory';
       default:
         return '🔧 $toolName';
     }
@@ -66,7 +72,7 @@ class OrchestratorAgentService {
 
   OrchestratorAgentService._();
 
-  final List<AssistantMessage> _messages = [];
+  final List<ChatMessage> _conversationHistory = [];
   final List<Tool> _tools = [];
   bool _isInitialized = false;
 
@@ -75,7 +81,7 @@ class OrchestratorAgentService {
 Available capabilities:
 - List and view courses, modules, subsections, and activities
 - Create courses with modules, subsections, and activities
-- List folders and files from the file system
+- List directory contents (files and folders) from the file system using the ls tool
 - Attach files to activities when creating them
 
 CRITICAL INSTRUCTIONS:
@@ -111,9 +117,9 @@ Always format the actual data from tool results in a clear, readable way.''';
     if (_isInitialized) return;
 
     final autocompletion = AutocompletionService.instance;
-    if (!autocompletion.isConfigured) {
+    if (!autocompletion.isHighConfigured) {
       throw StateError(
-        'AutocompletionService is not configured. Please configure LLM settings first.',
+        'High-tier AutocompletionService is not configured. Please configure high LLM settings first (llm.high.*).',
       );
     }
 
@@ -146,8 +152,7 @@ Always format the actual data from tool results in a clear, readable way.''';
     _registerAgenixTool(_createCreateActivityTool(lmsStorage));
 
     // File System Tools
-    _registerAgenixTool(_createListFoldersTool(fileStorage));
-    _registerAgenixTool(_createListFilesTool(fileStorage));
+    _registerAgenixTool(_createLsTool(fileStorage));
   }
 
   void _registerAgenixTool(Tool tool) {
@@ -222,16 +227,16 @@ Always format the actual data from tool results in a clear, readable way.''';
     );
   }
 
-  Tool _createListFoldersTool(FileSystemStorage storage) {
+  Tool _createLsTool(FileSystemStorage storage) {
     return Tool(
-      name: 'list_folders',
-      description: 'List all folders in a specific path. Use "/" for root.',
+      name: 'ls',
+      description: 'List contents of a directory (both files and folders), similar to Unix ls command. Use "/" or "" for root.',
       parameters: {
         'type': 'object',
         'properties': {
           'path': {
             'type': 'string',
-            'description': 'The folder path to list. Use "/" for root. Example: "documents/" or "images/"',
+            'description': 'The directory path to list. Use "/" or "" for root. Example: "documents/" or "images/"',
           },
         },
         'required': ['path'],
@@ -240,68 +245,55 @@ Always format the actual data from tool results in a clear, readable way.''';
         try {
           String path = args['path'] as String? ?? '/';
 
+          // Normalize path
           if (path == '/') {
             path = '';
           } else if (!path.endsWith('/') && path.isNotEmpty) {
             path = '$path/';
           }
 
+          // Get folders and files in parallel
           final folders = await storage.getFoldersInPath(path);
-          final foldersInfo = folders.map((folder) => {
-            'name': folder.name,
-            'path': folder.path,
-            'parent_path': folder.parentPath,
-          }).toList();
+          final files = await storage.getFilesInFolder(path);
 
-          return ToolResult.success({
-            'message': 'Found ${folders.length} folders in path: ${path.isEmpty ? "root" : path}',
-            'data': {'folders': foldersInfo, 'current_path': path},
-          });
-        } catch (e) {
-          return ToolResult.failure('Failed to list folders: $e');
-        }
-      },
-    );
-  }
+          // Build unified items list with type indicators
+          final items = <Map<String, dynamic>>[];
 
-  Tool _createListFilesTool(FileSystemStorage storage) {
-    return Tool(
-      name: 'list_files',
-      description: 'List all files in a specific folder. Use empty string "" for root folder.',
-      parameters: {
-        'type': 'object',
-        'properties': {
-          'folder_path': {
-            'type': 'string',
-            'description': 'The folder path to list files from. Use empty string "" for root folder.',
-          },
-        },
-        'required': ['folder_path'],
-      },
-      handler: (args) async {
-        try {
-          String folderPath = args['folder_path'] as String? ?? '';
-
-          if (folderPath.isNotEmpty && !folderPath.endsWith('/')) {
-            folderPath = '$folderPath/';
+          // Add folders first (like ls does)
+          for (final folder in folders) {
+            items.add({
+              'name': folder.name,
+              'type': 'directory',
+              'path': folder.path,
+            });
           }
 
-          final files = await storage.getFilesInFolder(folderPath);
-          final filesInfo = files.map((file) => {
-            'id': file.id,
-            'name': file.name,
-            'path': file.relativePath,
-            'folder': file.folderPath,
-            'mime_type': file.mimeType ?? 'unknown',
-            'size': file.size,
-          }).toList();
+          // Add files
+          for (final file in files) {
+            items.add({
+              'name': file.name,
+              'type': 'file',
+              'id': file.id,
+              'path': file.relativePath,
+              'mime_type': file.mimeType ?? 'unknown',
+              'size': file.size,
+            });
+          }
 
           return ToolResult.success({
-            'message': 'Found ${files.length} files in folder: ${folderPath.isEmpty ? "root" : folderPath}',
-            'data': {'files': filesInfo, 'folder_path': folderPath},
+            'message': 'Found ${folders.length} directories and ${files.length} files in ${path.isEmpty ? "root" : path}',
+            'data': {
+              'current_path': path,
+              'items': items,
+              'summary': {
+                'total': items.length,
+                'directories': folders.length,
+                'files': files.length,
+              },
+            },
           });
         } catch (e) {
-          return ToolResult.failure('Failed to list files: $e');
+          return ToolResult.failure('Failed to list directory: $e');
         }
       },
     );
@@ -645,14 +637,13 @@ Always format the actual data from tool results in a clear, readable way.''';
       await initialize();
     }
 
-    // Add user message to service's internal history
-    _messages.add(AssistantMessage(
+    // Add user message to conversation history
+    _conversationHistory.add(ChatMessage(
+      role: MessageRole.user,
       content: message,
-      timestamp: DateTime.now(),
-      isUser: true,
     ));
 
-    // Build conversation history
+    // Build conversation history with system prompt
     final conversationHistory = _buildConversationHistory();
 
     final autocompletion = AutocompletionService.instance;
@@ -662,7 +653,7 @@ Always format the actual data from tool results in a clear, readable way.''';
     while (true) {
       final toolCalls = <ToolCallEvent>[];
 
-      await for (final event in autocompletion.completeWithTools(
+      await for (final event in autocompletion.completeWithToolsHigh(
         conversationHistory,
         tools: _tools.isNotEmpty ? _tools : null,
       )) {
@@ -678,27 +669,28 @@ Always format the actual data from tool results in a clear, readable way.''';
       if (toolCalls.isEmpty) {
         final response = buffer.toString().trim();
 
-        // Safety check: if response looks like raw JSON, it's likely an error
-        if (response.isEmpty) {
-          // No response generated - this might happen with some models
-          // The UI will handle this with a fallback message
-        } else if (response.startsWith('{') || response.startsWith('[')) {
-          // Looks like raw JSON - this shouldn't happen with a proper prompt
-          // But let's handle it gracefully
-          _messages.add(AssistantMessage(
-            content: 'Action completed.',
-            timestamp: DateTime.now(),
-            isUser: false,
-          ));
-        } else {
-          _messages.add(AssistantMessage(
+        // Add assistant response to persistent conversation history
+        if (response.isNotEmpty) {
+          _conversationHistory.add(ChatMessage(
+            role: MessageRole.assistant,
             content: response,
-            timestamp: DateTime.now(),
-            isUser: false,
           ));
         }
         return;
       }
+
+      // Add assistant message with tool calls to persistent history
+      final assistantMessage = ChatMessage(
+        role: MessageRole.assistant,
+        content: buffer.toString(),
+        toolCalls: toolCalls.map((tc) => ChatToolCall(
+          id: tc.id,
+          name: tc.name,
+          arguments: tc.arguments,
+        )).toList(),
+      );
+      _conversationHistory.add(assistantMessage);
+      conversationHistory.add(assistantMessage);
 
       // Execute tool calls
       for (final toolCall in toolCalls) {
@@ -707,25 +699,14 @@ Always format the actual data from tool results in a clear, readable way.''';
 
         final result = await _executeTool(toolCall.name, toolCall.arguments);
 
-        // Add tool call to history
-        conversationHistory.add(ChatMessage(
-          role: MessageRole.assistant,
-          content: buffer.toString(),
-          toolCalls: [
-            ChatToolCall(
-              id: toolCall.id,
-              name: toolCall.name,
-              arguments: toolCall.arguments,
-            )
-          ],
-        ));
-
-        // Add tool result to history
-        conversationHistory.add(ChatMessage(
+        // Add tool result to both persistent and local history
+        final toolResultMessage = ChatMessage(
           role: MessageRole.tool,
           toolCallId: toolCall.id,
           content: jsonEncode(result.toJson()),
-        ));
+        );
+        _conversationHistory.add(toolResultMessage);
+        conversationHistory.add(toolResultMessage);
       }
 
       buffer.clear();
@@ -765,25 +746,24 @@ Always format the actual data from tool results in a clear, readable way.''';
       ),
     ];
 
-    // Add conversation messages
-    messages.addAll(_messages.map((msg) {
-      return ChatMessage(
-        role: msg.isUser ? MessageRole.user : MessageRole.assistant,
-        content: msg.content,
-      );
-    }));
+    // Add all persistent conversation messages (includes tool calls and results)
+    messages.addAll(_conversationHistory);
 
     return messages;
   }
 
-  /// Get all messages
+  /// Get all messages for display (filters out tool messages)
   List<AssistantMessage> getMessages() {
-    return List.unmodifiable(_messages);
+    return _conversationHistory
+        .where((msg) => msg.role == MessageRole.user || msg.role == MessageRole.assistant)
+        .where((msg) => msg.content.isNotEmpty)
+        .map((msg) => AssistantMessage.fromChatMessage(msg))
+        .toList();
   }
 
   /// Reset conversation
   Future<void> resetConversation() async {
-    _messages.clear();
+    _conversationHistory.clear();
   }
 
   /// Check if initialized
@@ -791,7 +771,7 @@ Always format the actual data from tool results in a clear, readable way.''';
 
   /// Dispose
   void dispose() {
-    _messages.clear();
+    _conversationHistory.clear();
     _tools.clear();
     _isInitialized = false;
   }

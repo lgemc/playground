@@ -104,17 +104,26 @@ class VocabularyApp extends SubApp {
   }
 
   @override
-  List<ShareContentType> get acceptedShareTypes => [ShareContentType.text];
+  List<ShareContentType> get acceptedShareTypes => [
+    ShareContentType.text,
+    ShareContentType.note,
+  ];
 
   @override
   Future<void> onReceiveShare(ShareContent content) async {
+    String text = '';
+
     if (content.type == ShareContentType.text) {
-      final text = content.data['text'] as String? ?? '';
-      if (text.isNotEmpty) {
-        // Create new word entry from shared text
-        final word = Word.create(word: text);
-        await VocabularyStorage.instance.saveWord(word);
-      }
+      text = content.data['text'] as String? ?? '';
+    } else if (content.type == ShareContentType.note) {
+      // For notes, use the body as the word text
+      text = content.data['body'] as String? ?? '';
+    }
+
+    if (text.isNotEmpty) {
+      // Create new word entry from shared text
+      final word = Word.create(word: text);
+      await VocabularyStorage.instance.saveWord(word);
     }
   }
 

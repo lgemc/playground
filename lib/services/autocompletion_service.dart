@@ -14,12 +14,25 @@ class AutocompletionConfig {
   static const String temperature = 'llm.temperature';
   static const String summaryMaxTokens = 'llm.summary_max_tokens';
 
+  // High-tier model configuration (for agents and complex tasks)
+  static const String highBaseUrl = 'llm.high.base_url';
+  static const String highApiKey = 'llm.high.api_key';
+  static const String highModel = 'llm.high.model';
+  static const String highMaxTokens = 'llm.high.max_tokens';
+  static const String highTemperature = 'llm.high.temperature';
+
   // Default values
   static const String defaultBaseUrl = 'https://api.openai.com/v1';
   static const String defaultModel = 'gpt-4o-mini';
   static const String defaultMaxTokens = '1024';
   static const String defaultTemperature = '0.7';
   static const String defaultSummaryMaxTokens = '4096';
+
+  // Default values for high-tier model
+  static const String defaultHighBaseUrl = 'https://api.openai.com/v1';
+  static const String defaultHighModel = 'gpt-4o';
+  static const String defaultHighMaxTokens = '4096';
+  static const String defaultHighTemperature = '0.7';
 }
 
 /// Message role in a chat conversation
@@ -146,6 +159,10 @@ class AutocompletionService {
   String? _currentBaseUrl;
   String? _currentApiKey;
 
+  OpenAIClient? _highClient;
+  String? _currentHighBaseUrl;
+  String? _currentHighApiKey;
+
   /// Initialize global config defaults. Call this during app startup.
   static void initializeDefaults() {
     final config = ConfigService.instance;
@@ -154,7 +171,13 @@ class AutocompletionService {
     config.setDefault(AutocompletionConfig.maxTokens, AutocompletionConfig.defaultMaxTokens);
     config.setDefault(AutocompletionConfig.temperature, AutocompletionConfig.defaultTemperature);
     config.setDefault(AutocompletionConfig.summaryMaxTokens, AutocompletionConfig.defaultSummaryMaxTokens);
-    // API key has no default - must be configured by user
+
+    // High-tier model defaults
+    config.setDefault(AutocompletionConfig.highBaseUrl, AutocompletionConfig.defaultHighBaseUrl);
+    config.setDefault(AutocompletionConfig.highModel, AutocompletionConfig.defaultHighModel);
+    config.setDefault(AutocompletionConfig.highMaxTokens, AutocompletionConfig.defaultHighMaxTokens);
+    config.setDefault(AutocompletionConfig.highTemperature, AutocompletionConfig.defaultHighTemperature);
+    // API keys have no default - must be configured by user
   }
 
   /// Get or create the OpenAI client with current configuration
@@ -179,9 +202,37 @@ class AutocompletionService {
     return _client!;
   }
 
+  /// Get or create the high-tier OpenAI client with current configuration
+  OpenAIClient _getHighClient() {
+    final config = ConfigService.instance;
+    final baseUrl = config.get(AutocompletionConfig.highBaseUrl) ??
+        AutocompletionConfig.defaultHighBaseUrl;
+    final apiKey = config.get(AutocompletionConfig.highApiKey);
+
+    // Recreate client if config changed
+    if (_highClient == null ||
+        _currentHighBaseUrl != baseUrl ||
+        _currentHighApiKey != apiKey) {
+      _highClient = OpenAIClient(
+        apiKey: apiKey ?? '',
+        baseUrl: baseUrl,
+      );
+      _currentHighBaseUrl = baseUrl;
+      _currentHighApiKey = apiKey;
+    }
+
+    return _highClient!;
+  }
+
   /// Check if the service is configured (has API key)
   bool get isConfigured {
     final apiKey = ConfigService.instance.get(AutocompletionConfig.apiKey);
+    return apiKey != null && apiKey.isNotEmpty;
+  }
+
+  /// Check if the high-tier service is configured (has API key)
+  bool get isHighConfigured {
+    final apiKey = ConfigService.instance.get(AutocompletionConfig.highApiKey);
     return apiKey != null && apiKey.isNotEmpty;
   }
 
@@ -479,6 +530,120 @@ class AutocompletionService {
     }
   }
 
+  /// Generate a completion with tools support using high-tier model (streaming)
+  /// Yields ChatStreamEvent objects for content chunks and tool calls
+  /// Uses the high-tier model configuration (llm.high.*)
+  Stream<ChatStreamEvent> completeWithToolsHigh(
+    List<ChatMessage> messages, {
+    List<Tool>? tools,
+    String? model,
+    int? maxTokens,
+    double? temperature,
+  }) async* {
+    if (!isHighConfigured) {
+      throw StateError(
+        'High-tier AutocompletionService not configured. Set ${AutocompletionConfig.highApiKey} in config.',
+      );
+    }
+
+    final config = ConfigService.instance;
+    final effectiveModel =
+        model ?? config.get(AutocompletionConfig.highModel) ?? AutocompletionConfig.defaultHighModel;
+    final effectiveMaxTokens = maxTokens ??
+        int.tryParse(config.get(AutocompletionConfig.highMaxTokens) ?? '') ??
+        int.parse(AutocompletionConfig.defaultHighMaxTokens);
+    final effectiveTemperature = temperature ??
+        double.tryParse(config.get(AutocompletionConfig.highTemperature) ?? '') ??
+        double.parse(AutocompletionConfig.defaultHighTemperature);
+
+    final client = _getHighClient();
+
+    // Build tools in OpenAI format
+    final openAITools = tools?.map((tool) => ChatCompletionTool(
+          type: ChatCompletionToolType.function,
+          function: FunctionObject(
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          ),
+        )).toList();
+
+    final stream = client.createChatCompletionStream(
+      request: CreateChatCompletionRequest(
+        model: ChatCompletionModel.modelId(effectiveModel),
+        messages: messages.map((m) => m.toOpenAI()).toList(),
+        maxCompletionTokens: effectiveMaxTokens,
+        temperature: effectiveTemperature,
+        tools: openAITools,
+      ),
+    );
+
+    // Track tool calls being built up from streaming chunks
+    final toolCallsInProgress = <String, _ToolCallBuilder>{};
+
+    await for (final chunk in stream) {
+      final choice = chunk.choices?.firstOrNull;
+      if (choice == null) continue;
+
+      // Only use content, not reasoningContent (reasoning is sent before the actual answer)
+      final contentDelta = choice.delta?.content;
+      if (contentDelta != null && contentDelta.isNotEmpty) {
+        yield ContentChunk(contentDelta);
+      }
+
+      // Handle tool call deltas
+      final toolCallDeltas = choice.delta?.toolCalls;
+      if (toolCallDeltas != null) {
+        for (final toolCallDelta in toolCallDeltas) {
+          final index = toolCallDelta.index;
+          final indexKey = index.toString();
+
+          // Initialize builder if this is a new tool call
+          if (!toolCallsInProgress.containsKey(indexKey)) {
+            toolCallsInProgress[indexKey] = _ToolCallBuilder();
+          }
+
+          final builder = toolCallsInProgress[indexKey]!;
+
+          // Accumulate data from delta
+          if (toolCallDelta.id != null) {
+            builder.id = toolCallDelta.id!;
+          }
+          if (toolCallDelta.function?.name != null) {
+            builder.name = toolCallDelta.function!.name!;
+          }
+          if (toolCallDelta.function?.arguments != null) {
+            builder.argumentsBuffer.write(toolCallDelta.function!.arguments!);
+          }
+        }
+      }
+
+      // Check if stream is done
+      final finishReason = choice.finishReason;
+      if (finishReason != null) {
+        // If finished with tool_calls, emit the tool call events
+        if (finishReason == ChatCompletionFinishReason.toolCalls) {
+          for (final builder in toolCallsInProgress.values) {
+            if (builder.id != null && builder.name != null) {
+              Map<String, dynamic> args = {};
+              try {
+                final argsString = builder.argumentsBuffer.toString();
+                if (argsString.isNotEmpty) {
+                  args = jsonDecode(argsString) as Map<String, dynamic>;
+                }
+              } catch (_) {
+                // Skip malformed arguments
+              }
+              yield ToolCallEvent(builder.id!, builder.name!, args);
+            }
+          }
+        }
+
+        yield CompletionDone();
+      }
+    }
+  }
+
   /// Simple completion with a single prompt (no conversation context)
   Future<String> prompt(
     String prompt, {
@@ -568,6 +733,63 @@ class AutocompletionService {
     }
   }
 
+  /// High-tier streaming completion (for complex tasks like concept extraction)
+  ///
+  /// Uses the high-tier model configuration for better quality results.
+  /// Similar to promptStreamContentOnly but uses the high client.
+  Stream<String> promptStreamContentOnlyHigh(
+    String prompt, {
+    String? systemPrompt,
+    String? model,
+    int? maxTokens,
+    double? temperature,
+  }) async* {
+    if (!isHighConfigured) {
+      throw StateError(
+        'High-tier AutocompletionService not configured. Set ${AutocompletionConfig.highApiKey} in config.',
+      );
+    }
+
+    final messages = <ChatMessage>[
+      if (systemPrompt != null)
+        ChatMessage(role: MessageRole.system, content: systemPrompt),
+      ChatMessage(role: MessageRole.user, content: prompt),
+    ];
+
+    final config = ConfigService.instance;
+    final effectiveModel =
+        model ?? config.get(AutocompletionConfig.highModel) ?? AutocompletionConfig.defaultHighModel;
+    final effectiveMaxTokens = maxTokens ??
+        int.tryParse(config.get(AutocompletionConfig.highMaxTokens) ?? '') ??
+        int.parse(AutocompletionConfig.defaultHighMaxTokens);
+    final effectiveTemperature = temperature ??
+        double.tryParse(config.get(AutocompletionConfig.highTemperature) ?? '') ??
+        double.parse(AutocompletionConfig.defaultHighTemperature);
+
+    final client = _getHighClient();
+
+    final stream = client.createChatCompletionStream(
+      request: CreateChatCompletionRequest(
+        model: ChatCompletionModel.modelId(effectiveModel),
+        messages: messages.map((m) => m.toOpenAI()).toList(),
+        maxCompletionTokens: effectiveMaxTokens,
+        temperature: effectiveTemperature,
+      ),
+    );
+
+    await for (final chunk in stream) {
+      final choice = chunk.choices?.firstOrNull;
+      if (choice == null) continue;
+
+      // Support both regular content and reasoning content
+      final delta = choice.delta?.content ?? choice.delta?.reasoningContent;
+
+      if (delta != null && delta.isNotEmpty) {
+        yield delta;
+      }
+    }
+  }
+
   /// Update API configuration
   Future<void> configure({
     String? baseUrl,
@@ -601,6 +823,7 @@ class AutocompletionService {
   /// Reset instance for testing
   static void resetInstance() {
     _instance?._client = null;
+    _instance?._highClient = null;
     _instance = null;
   }
 }

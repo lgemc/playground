@@ -13,6 +13,19 @@ class ConceptExtractionService {
 
   final _autocompletion = AutocompletionService.instance;
 
+  /// Maximum characters for input text (approx 20k tokens)
+  /// This ensures we don't exceed model context limits
+  static const int _maxInputChars = 80000;
+
+  /// Truncate text to fit within token limits
+  String _truncateText(String text, {int maxChars = _maxInputChars}) {
+    if (text.length <= maxChars) return text;
+
+    // Truncate and add indicator
+    print('[ConceptExtraction] Truncating input from ${text.length} to $maxChars chars');
+    return '${text.substring(0, maxChars)}\n\n[... content truncated due to length ...]';
+  }
+
   /// Extract concepts from transcript using LLM
   Future<List<ReviewableItem>> extractFromTranscript({
     required String activityId,
@@ -21,21 +34,36 @@ class ConceptExtractionService {
     String? moduleId,
     String? subSectionId,
   }) async {
+    final truncatedTranscript = _truncateText(transcript);
+
     final prompt = '''Extract key learning concepts from this lecture transcript.
 
-Create reviewable items in these categories:
-1. FLASHCARDS: Term/definition pairs for vocabulary and concepts
-2. QUESTIONS: Important principles as multiple-choice questions
-3. PROCEDURES: Step-by-step processes
+Create a DIVERSE mix of reviewable items:
 
-For each item, provide:
-- Type (flashcard/multipleChoice/procedure)
-- Content (question or term)
-- Answer (correct answer or definition)
-- Distractors (3 plausible wrong answers for MCQs)
+1. FLASHCARDS (30%): Simple term/definition pairs for vocabulary
+   - Use for key terms and basic concepts
+   - Will be converted to quiz questions later
+
+2. MULTIPLE CHOICE (30%): Questions with 3-4 wrong answers
+   - Test understanding of principles
+   - Distractors must be plausible
+
+3. TRUE/FALSE (20%): Statements that are true or false
+   - Answer must be exactly "true" or "false"
+   - Make statements clear and unambiguous
+
+4. FILL IN BLANK (10%): Sentences with missing words
+   - Use _____ for the blank (1-2 words only)
+   - Answer should be the word(s) that fill the blank
+
+5. SHORT ANSWER (10%): Open-ended questions
+   - For concepts requiring brief explanations
+   - Answer should be 1-3 sentences
+
+IMPORTANT: Generate variety! Don't just create flashcards and multiple choice.
 
 Transcript:
-$transcript
+$truncatedTranscript
 
 Output as JSON array:
 [
@@ -53,15 +81,30 @@ Output as JSON array:
       "When you need to dispose of resources",
       "When you need to navigate to another screen"
     ]
+  },
+  {
+    "type": "trueFalse",
+    "content": "setState() can only be called inside StatefulWidget classes",
+    "answer": "true"
+  },
+  {
+    "type": "fillInBlank",
+    "content": "The _____ method is called when a StatefulWidget's state changes",
+    "answer": "build"
+  },
+  {
+    "type": "shortAnswer",
+    "content": "Explain the lifecycle of a StatefulWidget",
+    "answer": "A StatefulWidget goes through initState, build, and dispose phases during its lifecycle"
   }
 ]''';
 
     try {
       final response = await _autocompletion
-          .promptStreamContentOnly(
+          .promptStreamContentOnlyHigh(
             prompt,
             temperature: 0.3, // Lower temperature for consistency
-            maxTokens: 4000,
+            maxTokens: 8000, // Allow more space for comprehensive extraction
           )
           .join();
 
@@ -86,38 +129,59 @@ Output as JSON array:
     String? moduleId,
     String? subSectionId,
   }) async {
+    final truncatedDocument = _truncateText(documentText);
+
     final prompt = '''Extract key concepts from this educational document.
 
-Focus on:
-- Important definitions (as flashcards)
-- Core principles (as questions)
-- Critical facts (as flashcards)
+Create a DIVERSE mix of reviewable items:
+
+1. FLASHCARDS (30%): Simple term/definition pairs
+2. MULTIPLE CHOICE (30%): Questions with 3-4 distractors
+3. TRUE/FALSE (20%): Clear true/false statements (answer: "true" or "false")
+4. FILL IN BLANK (10%): Sentences with _____ for missing words
+5. SHORT ANSWER (10%): Brief explanation questions
+
+IMPORTANT: Generate variety! Include all question types, not just flashcards and multiple choice.
 
 Document:
-$documentText
+$truncatedDocument
 
-Output as JSON array with type, content, answer, and optional distractors.
-Use the same format as:
+Output as JSON array:
 [
   {
     "type": "flashcard",
-    "content": "Term or concept",
-    "answer": "Definition or explanation"
+    "content": "What is X?",
+    "answer": "Definition of X"
   },
   {
     "type": "multipleChoice",
-    "content": "Question about a principle",
+    "content": "Question?",
     "answer": "Correct answer",
-    "distractors": ["Wrong answer 1", "Wrong answer 2", "Wrong answer 3"]
+    "distractors": ["Wrong 1", "Wrong 2", "Wrong 3"]
+  },
+  {
+    "type": "trueFalse",
+    "content": "Statement about concept",
+    "answer": "true"
+  },
+  {
+    "type": "fillInBlank",
+    "content": "Sentence with _____ missing",
+    "answer": "word"
+  },
+  {
+    "type": "shortAnswer",
+    "content": "Explain concept X",
+    "answer": "Brief explanation"
   }
 ]''';
 
     try {
       final response = await _autocompletion
-          .promptStreamContentOnly(
+          .promptStreamContentOnlyHigh(
             prompt,
             temperature: 0.3,
-            maxTokens: 4000,
+            maxTokens: 8000, // Allow more space for comprehensive extraction
           )
           .join();
 
@@ -248,10 +312,6 @@ Use the same format as:
       case 'fillinblank':
       case 'fill_in_blank':
         return ReviewableType.fillInBlank;
-      case 'procedure':
-        return ReviewableType.procedure;
-      case 'summary':
-        return ReviewableType.summary;
       default:
         return ReviewableType.flashcard;
     }
