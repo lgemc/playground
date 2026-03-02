@@ -1307,6 +1307,7 @@ class FileSystemStorage {
     print('[FileSystem] Found ${results.length} derivative(s) without content hash, generating...');
 
     int regenerated = 0;
+    int deleted = 0;
     for (final derivativeMap in results) {
       final derivative = DerivativeArtifact.fromJson(derivativeMap);
 
@@ -1328,11 +1329,21 @@ class FileSystemStorage {
           print('[FileSystem]   ✗ Failed to generate hash for ${derivative.id}: $e');
         }
       } else {
-        print('[FileSystem]   ⚠️ File missing for ${derivative.id}, skipping');
+        // Delete orphaned derivatives (marked completed but file doesn't exist)
+        print('[FileSystem]   ⚠️ File missing for ${derivative.id}, deleting orphaned record');
+        await CrdtDatabase.instance.execute(
+          'UPDATE derivatives SET deleted_at = ? WHERE id = ?',
+          [DateTime.now().millisecondsSinceEpoch, derivative.id],
+        );
+        deleted++;
       }
     }
 
-    print('[FileSystem] ✅ Regenerated hashes for $regenerated derivative(s)');
+    if (deleted > 0) {
+      print('[FileSystem] ✅ Regenerated hashes for $regenerated derivative(s), deleted $deleted orphaned record(s)');
+    } else {
+      print('[FileSystem] ✅ Regenerated hashes for $regenerated derivative(s)');
+    }
   }
 
   /// Get derivative by content hash

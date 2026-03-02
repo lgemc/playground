@@ -33,6 +33,12 @@ class VocabularyStorage {
         .map((e) => e as String)
         .toList();
 
+    final sampleAudioPaths = row['sample_audio_paths'] != null
+        ? (json.decode(row['sample_audio_paths'] as String) as List<dynamic>)
+            .map((e) => e as String)
+            .toList()
+        : <String>[];
+
     return Word(
       id: row['id'] as String,
       word: row['word'] as String,
@@ -40,6 +46,8 @@ class VocabularyStorage {
       samplePhrases: samplePhrases,
       createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
       updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int),
+      wordAudioPath: row['word_audio_path'] as String?,
+      sampleAudioPaths: sampleAudioPaths,
     );
   }
 
@@ -201,6 +209,40 @@ class VocabularyStorage {
     );
 
     await saveWord(updatedWord);
+  }
+
+  Future<void> updateWordAudio(
+    String wordId, {
+    String? wordAudioPath,
+    List<String>? sampleAudioPaths,
+  }) async {
+    final devId = await deviceId;
+    final now = DateTime.now();
+
+    // Get current sync version
+    final rows = await CrdtDatabase.instance.query(
+      'SELECT sync_version FROM vocabulary_words WHERE id = ?',
+      [wordId],
+    );
+    if (rows.isEmpty) return;
+
+    final currentVersion = rows.first['sync_version'] as int;
+    final sampleAudioPathsJson = json.encode(sampleAudioPaths ?? []);
+
+    // Update audio paths
+    await CrdtDatabase.instance.execute(
+      '''UPDATE vocabulary_words
+         SET word_audio_path = ?, sample_audio_paths = ?, updated_at = ?, device_id = ?, sync_version = ?
+         WHERE id = ?''',
+      [
+        wordAudioPath,
+        sampleAudioPathsJson,
+        now.millisecondsSinceEpoch,
+        devId,
+        currentVersion + 1,
+        wordId,
+      ],
+    );
   }
 
   /// Watch words for reactive updates

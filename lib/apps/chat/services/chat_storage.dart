@@ -1,3 +1,4 @@
+import 'dart:convert';
 import '../models/chat.dart';
 import '../models/message.dart';
 import '../../../core/database/crdt_database.dart';
@@ -88,7 +89,7 @@ class ChatStorage {
   /// Search messages by content
   Future<List<Message>> searchMessages(String query) async {
     final results = await CrdtDatabase.instance.query('''
-      SELECT id, chat_id, content, is_user, created_at
+      SELECT id, chat_id, content, is_user, created_at, metadata
       FROM messages
       WHERE content LIKE ? AND deleted_at IS NULL
       ORDER BY created_at DESC
@@ -102,6 +103,9 @@ class ChatStorage {
         content: row['content'] as String,
         isUser: (row['is_user'] as int) == 1,
         createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+        metadata: row['metadata'] != null
+            ? jsonDecode(row['metadata'] as String) as Map<String, dynamic>
+            : null,
       );
     }).toList();
   }
@@ -233,7 +237,7 @@ class ChatStorage {
   /// Get all messages for a chat
   Future<List<Message>> getMessages(String chatId) async {
     final results = await CrdtDatabase.instance.query('''
-      SELECT id, chat_id, content, is_user, created_at
+      SELECT id, chat_id, content, is_user, created_at, metadata
       FROM messages
       WHERE chat_id = ? AND deleted_at IS NULL
       ORDER BY created_at ASC
@@ -246,6 +250,9 @@ class ChatStorage {
         content: row['content'] as String,
         isUser: (row['is_user'] as int) == 1,
         createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
+        metadata: row['metadata'] != null
+            ? jsonDecode(row['metadata'] as String) as Map<String, dynamic>
+            : null,
       );
     }).toList();
   }
@@ -256,14 +263,15 @@ class ChatStorage {
 
     await CrdtDatabase.instance.execute('''
       INSERT OR REPLACE INTO messages (
-        id, chat_id, content, is_user, created_at, deleted_at, device_id, sync_version
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)
+        id, chat_id, content, is_user, created_at, deleted_at, metadata, device_id, sync_version
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1)
     ''', [
       message.id,
       message.chatId,
       message.content,
       message.isUser ? 1 : 0,
       message.createdAt.millisecondsSinceEpoch,
+      message.metadata != null ? jsonEncode(message.metadata) : null,
       deviceId,
     ]);
 

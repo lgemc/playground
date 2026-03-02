@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../models/chat.dart';
@@ -12,6 +13,8 @@ import '../../../services/share_content.dart';
 import '../../../services/share_service.dart';
 import '../../../services/tool_service.dart';
 import '../theme/chat_theme.dart';
+import '../../file_system/services/file_system_storage.dart';
+import '../../file_system/screens/image_viewer_screen.dart';
 
 class ChatDetailScreen extends StatefulWidget {
   final Chat chat;
@@ -85,6 +88,20 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       _hasUserSentMessage = messages.isNotEmpty;
     });
     _scrollToBottom();
+
+    // Check if this is a file/derivative share and generate AI response
+    if (messages.length == 1 && messages.first.isUser) {
+      final metadata = messages.first.metadata;
+      if (metadata != null) {
+        final isFileContent = metadata['isFileContent'] as bool? ?? false;
+        final isDerivativeContent = metadata['isDerivativeContent'] as bool? ?? false;
+
+        if (isFileContent || isDerivativeContent) {
+          // Auto-generate AI response for file/derivative shares
+          _generateAIResponseForFileShare();
+        }
+      }
+    }
   }
 
   void _scrollToBottom() {
@@ -197,6 +214,156 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
+  Future<void> _generateAIResponseForFileShare() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isGeneratingResponse = true;
+    });
+
+    // Create placeholder message for streaming
+    final aiMessageId = _uuid.v4();
+    final aiMessage = Message(
+      id: aiMessageId,
+      chatId: widget.chat.id,
+      content: '',
+      isUser: false,
+      createdAt: DateTime.now(),
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _messages.add(aiMessage);
+    });
+
+    _scrollToBottom();
+
+    try {
+      final autocompletionService = AutocompletionService.instance;
+
+      if (!autocompletionService.isConfigured) {
+        final errorMessage = aiMessage.copyWith(
+          content: 'AI service not configured. Please set your LLM API key in Settings.',
+        );
+        await ChatStorage.instance.createMessage(errorMessage);
+
+        if (!mounted) return;
+
+        setState(() {
+          _messages[_messages.length - 1] = errorMessage;
+          _isGeneratingResponse = false;
+        });
+        return;
+      }
+
+      // Get the shared content
+      final userMessage = _messages.first;
+      final content = userMessage.content;
+
+      // Build special prompt for file content
+      final systemPrompt = '''You are a helpful AI assistant. The user has shared a document or file content with you.
+
+IMPORTANT INSTRUCTIONS:
+1. Do NOT generate any content, summaries, or analysis until the user explicitly asks for it
+2. First, acknowledge that you've received the content
+3. Then, analyze the content and suggest 3-5 specific actions the user might want to perform with this content
+4. Format your response EXACTLY as follows:
+
+Nice, I see the content you just shared. I suggest you to perform the next actions:
+
+ACTION: [First action suggestion]
+ACTION: [Second action suggestion]
+ACTION: [Third action suggestion]
+(etc.)
+
+Make the action suggestions specific to the content type and what you see in the document.''';
+
+      try {
+        final buffer = StringBuffer();
+
+        await for (final chunk in autocompletionService.promptStream(
+          content,
+          systemPrompt: systemPrompt,
+          temperature: 0.7,
+          maxTokens: 500,
+        )) {
+          buffer.write(chunk);
+
+          if (!mounted) return;
+
+          // Update the message in real-time
+          final updatedMessage = aiMessage.copyWith(content: buffer.toString());
+          setState(() {
+            _messages[_messages.length - 1] = updatedMessage;
+          });
+
+          _scrollToBottom();
+        }
+
+        final finalContent = buffer.toString();
+
+        // Parse suggested actions from the response
+        final actions = <String>[];
+        final actionRegex = RegExp(r'ACTION:\s*(.+)$', multiLine: true);
+        final matches = actionRegex.allMatches(finalContent);
+
+        for (final match in matches) {
+          final action = match.group(1)?.trim();
+          if (action != null && action.isNotEmpty) {
+            actions.add(action);
+          }
+        }
+
+        // Store the message with suggested actions
+        final finalMessage = aiMessage.copyWith(
+          content: finalContent,
+          metadata: {
+            'suggestedActions': actions,
+            'isFileShareResponse': true,
+          },
+        );
+        await ChatStorage.instance.createMessage(finalMessage);
+
+        if (!mounted) return;
+
+        setState(() {
+          _messages[_messages.length - 1] = finalMessage;
+          _isGeneratingResponse = false;
+        });
+
+        final updatedChat = _currentChat.copyWith(updatedAt: DateTime.now());
+        await ChatStorage.instance.updateChat(updatedChat);
+
+        if (!mounted) return;
+
+        setState(() {
+          _currentChat = updatedChat;
+        });
+
+        _scrollToBottom();
+      } catch (e) {
+        final errorMessage = aiMessage.copyWith(
+          content: 'Error generating AI response: ${e.toString()}',
+        );
+        await ChatStorage.instance.createMessage(errorMessage);
+
+        if (!mounted) return;
+
+        setState(() {
+          _messages[_messages.length - 1] = errorMessage;
+          _isGeneratingResponse = false;
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _isGeneratingResponse = false;
+      });
+    }
+  }
+
   Future<void> _generateAIResponse() async {
     if (!mounted) return;
 
@@ -254,6 +421,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         }).toList();
 
         // Tool calling loop - continue until LLM responds without tool calls
+        final toolResults = <String, Map<String, dynamic>>{};
+
         while (true) {
           final buffer = StringBuffer();
           final toolCalls = <ToolCallEvent>[];
@@ -286,7 +455,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             print(
                 'AI Response completed - Length: ${finalContent.length} chars');
 
-            final finalMessage = aiMessage.copyWith(content: finalContent);
+            // Include any tool results collected during this conversation
+            final finalMessage = aiMessage.copyWith(
+              content: finalContent,
+              metadata: toolResults.isNotEmpty
+                  ? {'tool_results': toolResults}
+                  : null,
+            );
             await ChatStorage.instance.createMessage(finalMessage);
 
             if (!mounted) return;
@@ -309,6 +484,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             );
 
             print('Tool result: ${result.toJson()}');
+
+            // Store tool results for metadata
+            toolResults[toolCall.name] = result.toJson();
 
             // Add assistant message with tool call to history
             conversationHistory.add(ChatMessage(
@@ -481,6 +659,35 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
     print('Rendering message ${message.id} - isUser: $isUser - Length: ${message.content.length}');
 
+    // Extract image attachments from metadata
+    final images = <Widget>[];
+    final suggestedActions = <String>[];
+    if (message.metadata != null) {
+      final toolResults = message.metadata!['tool_results'] as Map<String, dynamic>?;
+      if (toolResults != null) {
+        // Check for generate_image tool result
+        final imageResult = toolResults['generate_image'] as Map<String, dynamic>?;
+        if (imageResult != null && imageResult['success'] == true) {
+          final data = imageResult['data'] as Map<String, dynamic>?;
+          if (data != null) {
+            final fileId = data['file_id'] as String?;
+            final fileName = data['file_name'] as String?;
+            final relativePath = data['relative_path'] as String?;
+
+            if (fileId != null && relativePath != null) {
+              images.add(_buildImageAttachment(fileId, fileName ?? 'image.png', relativePath));
+            }
+          }
+        }
+      }
+
+      // Extract suggested actions
+      final actions = message.metadata!['suggestedActions'] as List?;
+      if (actions != null) {
+        suggestedActions.addAll(actions.cast<String>());
+      }
+    }
+
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -497,12 +704,48 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 color: isUser ? ChatTheme.userBubble : ChatTheme.aiBubble,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: MarkdownBody(
-                data: message.content,
-                shrinkWrap: true,
-                styleSheet: isUser ? ChatTheme.userMarkdownStyle : ChatTheme.aiMarkdownStyle,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  MarkdownBody(
+                    data: message.content,
+                    shrinkWrap: true,
+                    styleSheet: isUser ? ChatTheme.userMarkdownStyle : ChatTheme.aiMarkdownStyle,
+                  ),
+                  if (images.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    ...images,
+                  ],
+                ],
               ),
             ),
+            // Suggested actions as clickable buttons
+            if (suggestedActions.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: suggestedActions.map((action) {
+                  return ElevatedButton(
+                    onPressed: () => _sendActionMessage(action),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: ChatTheme.primary.withOpacity(0.1),
+                      foregroundColor: ChatTheme.primary,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                        side: BorderSide(color: ChatTheme.primary.withOpacity(0.3)),
+                      ),
+                    ),
+                    child: Text(
+                      action,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
             // Share button below message
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -532,6 +775,97 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
       ),
     );
+  }
+
+  void _sendActionMessage(String action) {
+    // Set the message text and send
+    _messageController.text = action;
+    _sendMessage();
+  }
+
+  Widget _buildImageAttachment(String fileId, String fileName, String relativePath) {
+    return FutureBuilder<String?>(
+      future: _getImagePath(relativePath),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (!snapshot.hasData || snapshot.data == null) {
+          return Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.grey[200],
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.image, color: Colors.grey[600]),
+                const SizedBox(width: 8),
+                Text(fileName, style: TextStyle(color: Colors.grey[600])),
+              ],
+            ),
+          );
+        }
+
+        final imagePath = snapshot.data!;
+
+        return GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ImageViewerScreen(
+                  filePath: imagePath,
+                  fileName: fileName,
+                ),
+              ),
+            );
+          },
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.file(
+              File(imagePath),
+              width: 200,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.broken_image, color: Colors.grey[600]),
+                      const SizedBox(width: 8),
+                      Text(fileName, style: TextStyle(color: Colors.grey[600])),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<String?> _getImagePath(String relativePath) async {
+    try {
+      final storageDir = FileSystemStorage.instance.storageDir;
+      final imagePath = '${storageDir.path}/$relativePath';
+      final file = File(imagePath);
+      if (await file.exists()) {
+        return imagePath;
+      }
+      return null;
+    } catch (e) {
+      print('Error getting image path: $e');
+      return null;
+    }
   }
 
   Widget _buildLoadingBubble() {

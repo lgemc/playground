@@ -11,7 +11,7 @@ class SummaryService {
   final _autocompletion = AutocompletionService.instance;
   final _config = ConfigService.instance;
 
-  static const String _systemPrompt = '''You are a helpful assistant that creates concise summaries of documents.
+  static const String _systemPrompt = '''You are a helpful assistant that creates comprehensive summaries of documents.
 
 Use this EXACT format (no other text):
 
@@ -20,10 +20,11 @@ SUMMARY:
 
 The summary should:
 - Be clear and well-structured
-- Capture the main points and key ideas
+- Capture ALL main points, key ideas, and important details
 - Be formatted in markdown
-- Be approximately 200-500 words unless the document is very short or very long
-- Use bullet points, headings, and other markdown formatting for clarity''';
+- Be as long as needed to cover the content thoroughly (aim for 1000-3000 words for long documents)
+- Use bullet points, headings, and other markdown formatting for clarity
+- For videos/transcripts: include timestamps or chronological flow when relevant''';
 
   /// Truncate text to fit within token limits
   /// Rough estimation: 1 token ≈ 4 characters for English text

@@ -26,7 +26,7 @@ class AutocompletionConfig {
   static const String defaultModel = 'gpt-4o-mini';
   static const String defaultMaxTokens = '1024';
   static const String defaultTemperature = '0.7';
-  static const String defaultSummaryMaxTokens = '4096';
+  static const String defaultSummaryMaxTokens = '16384';
 
   // Default values for high-tier model
   static const String defaultHighBaseUrl = 'https://api.openai.com/v1';

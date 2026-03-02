@@ -8,6 +8,10 @@ import 'core/database/crdt_database.dart';
 import 'services/config_service.dart';
 import 'services/autocompletion_service.dart';
 import 'services/queue_service.dart';
+import 'services/image_generation_service.dart';
+import 'services/audio_generation_service.dart';
+import 'services/tool_service.dart';
+import 'tools/generate_image_tool.dart';
 import 'core/logs_storage.dart';
 import 'core/sub_app.dart';
 import 'apps/launcher/launcher_screen.dart';
@@ -18,6 +22,7 @@ import 'apps/search/search_app.dart';
 import 'apps/settings/settings_app.dart';
 import 'apps/vocabulary/vocabulary_app.dart';
 import 'apps/vocabulary/services/vocabulary_definition_service.dart';
+import 'apps/vocabulary/services/vocabulary_audio_service.dart';
 import 'apps/chat/chat_app.dart';
 import 'apps/chat/services/chat_title_service.dart';
 import 'apps/file_system/file_system_app.dart';
@@ -50,6 +55,8 @@ void main() async {
 
   await ConfigService.instance.initialize();
   AutocompletionService.initializeDefaults();
+  ImageGenerationService.initializeDefaults();
+  AudioGenerationService.initializeDefaults();
   await LogsStorage.instance.init();
   await AppBus.instance.init();
   await QueueService.instance.init();
@@ -81,7 +88,7 @@ void main() async {
       try {
         await CrdtDatabase.instance.init(
           'crdt_test.db',
-          12, // Bumped version to 12 for derivative sync support
+          14, // Bumped version to 14 for vocabulary audio support
           (db, version) async {
             // Create a metadata table for CRDT
             await db.execute('''
@@ -792,6 +799,41 @@ void main() async {
 
               print('[Migration] Derivative sync columns added!');
             }
+
+            // Migration from version 12 to 13: Add metadata column to messages
+            if (oldVersion < 13) {
+              print('[Migration] Adding metadata column to messages...');
+
+              try {
+                await db.execute('ALTER TABLE messages ADD COLUMN metadata TEXT');
+                print('[Migration]   Added metadata column');
+              } catch (e) {
+                print('[Migration]   metadata column already exists');
+              }
+
+              print('[Migration] Message metadata column added!');
+            }
+
+            // Migration from version 13 to 14: Add audio columns to vocabulary_words
+            if (oldVersion < 14) {
+              print('[Migration] Adding audio columns to vocabulary_words...');
+
+              try {
+                await db.execute('ALTER TABLE vocabulary_words ADD COLUMN word_audio_path TEXT');
+                print('[Migration]   Added word_audio_path column');
+              } catch (e) {
+                print('[Migration]   word_audio_path column already exists');
+              }
+
+              try {
+                await db.execute('ALTER TABLE vocabulary_words ADD COLUMN sample_audio_paths TEXT DEFAULT \'[]\'');
+                print('[Migration]   Added sample_audio_paths column');
+              } catch (e) {
+                print('[Migration]   sample_audio_paths column already exists');
+              }
+
+              print('[Migration] Vocabulary audio columns added!');
+            }
           },
         );
         print('✅ CRDT database initialized successfully!');
@@ -806,7 +848,7 @@ void main() async {
     try {
       await CrdtDatabase.instance.init(
         'crdt_main.db',
-        12, // Bumped version to 12 for derivative sync support
+        14, // Bumped version to 14 for vocabulary audio support
         (db, version) async {
           // Create a metadata table for CRDT
           await db.execute('''
@@ -1476,6 +1518,41 @@ void main() async {
 
             print('[Migration] Derivative sync columns added!');
           }
+
+          // Migration from version 12 to 13: Add metadata column to messages
+          if (oldVersion < 13) {
+            print('[Migration] Adding metadata column to messages...');
+
+            try {
+              await db.execute('ALTER TABLE messages ADD COLUMN metadata TEXT');
+              print('[Migration]   Added metadata column');
+            } catch (e) {
+              print('[Migration]   metadata column already exists');
+            }
+
+            print('[Migration] Message metadata column added!');
+          }
+
+          // Migration from version 13 to 14: Add audio columns to vocabulary_words
+          if (oldVersion < 14) {
+            print('[Migration] Adding audio columns to vocabulary_words...');
+
+            try {
+              await db.execute('ALTER TABLE vocabulary_words ADD COLUMN word_audio_path TEXT');
+              print('[Migration]   Added word_audio_path column');
+            } catch (e) {
+              print('[Migration]   word_audio_path column already exists');
+            }
+
+            try {
+              await db.execute('ALTER TABLE vocabulary_words ADD COLUMN sample_audio_paths TEXT DEFAULT \'[]\'');
+              print('[Migration]   Added sample_audio_paths column');
+            } catch (e) {
+              print('[Migration]   sample_audio_paths column already exists');
+            }
+
+            print('[Migration] Vocabulary audio columns added!');
+          }
         },
       );
       print('🔧 [Mobile] CRDT database initialized: ${CrdtDatabase.instance.nodeId}');
@@ -1489,8 +1566,10 @@ void main() async {
   await FileSystemStorage.instance.init();
 
   VocabularyDefinitionService.instance.start();
+  VocabularyAudioService.instance.start();
   _initDerivativeService();
   _registerApps();
+  _registerTools();
   await _initSyncService(); // Initialize after apps are registered
   await _registerEventHandlers();
   runApp(const PlaygroundApp());
@@ -1536,6 +1615,13 @@ void _registerApps() {
     icon: Icons.calculate,
     themeColor: Colors.teal,
   ));
+}
+
+void _registerTools() {
+  final toolService = ToolService.instance;
+
+  // Register tools
+  toolService.register(GenerateImageTool.create());
 }
 
 /// Global sync service singleton

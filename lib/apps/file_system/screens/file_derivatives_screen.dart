@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:share_plus/share_plus.dart';
+import 'dart:io';
 import '../models/file_item.dart';
 import '../models/derivative_artifact.dart';
 import '../services/file_system_storage.dart';
@@ -9,6 +11,7 @@ import 'pdf_reader_screen.dart';
 import '../../video_viewer/screens/video_player_screen.dart';
 import '../../../services/share_service.dart';
 import '../../../services/share_content.dart';
+import '../../../core/app_registry.dart';
 import 'dart:async';
 
 class FileDerivativesScreen extends StatefulWidget {
@@ -121,6 +124,172 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
     );
     content.data['fileId'] = widget.file.id;
     await ShareService.instance.share(context, content);
+  }
+
+  Future<void> _shareFileExternal() async {
+    final filePath = _storage.getAbsolutePath(widget.file);
+    final xFile = XFile(filePath, mimeType: widget.file.mimeType);
+
+    await Share.shareXFiles(
+      [xFile],
+      subject: widget.file.name,
+    );
+  }
+
+  Future<void> _shareFileWithChat() async {
+    // Read file content if it's a markdown file
+    String contentToShare = '';
+
+    if (widget.file.extension.toLowerCase() == 'md') {
+      final filePath = _storage.getAbsolutePath(widget.file);
+      final physicalFile = File(filePath);
+
+      if (await physicalFile.exists()) {
+        contentToShare = await physicalFile.readAsString();
+      }
+    }
+
+    // Create share content with special marker for chat
+    final content = ShareContent.create(
+      type: ShareContentType.text,
+      sourceAppId: 'file_system',
+      data: {
+        'text': contentToShare,
+        'fileName': widget.file.name,
+        'fileId': widget.file.id,
+        'isFileContent': true,
+      },
+    );
+
+    // Share directly to chat app
+    final chatApp = AppRegistry.instance.getApp('chat');
+    if (chatApp != null) {
+      await ShareService.instance.shareTo('chat', content);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Shared with Chat')),
+        );
+
+        // Navigate to chat app
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => chatApp.build(context)),
+          (route) => false,
+        );
+      }
+    }
+  }
+
+  Future<void> _shareDerivativeWithChat(DerivativeArtifact derivative) async {
+    // Read derivative content
+    final content = await _storage.getDerivativeContent(derivative.id);
+
+    // Create share content with special marker for chat
+    final shareContent = ShareContent.create(
+      type: ShareContentType.text,
+      sourceAppId: 'file_system',
+      data: {
+        'text': content,
+        'fileName': '${widget.file.name} - ${derivative.type}',
+        'derivativeId': derivative.id,
+        'isDerivativeContent': true,
+      },
+    );
+
+    // Share directly to chat app
+    final chatApp = AppRegistry.instance.getApp('chat');
+    if (chatApp != null) {
+      await ShareService.instance.shareTo('chat', shareContent);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Shared derivative with Chat')),
+        );
+
+        // Navigate to chat app
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => chatApp.build(context)),
+          (route) => false,
+        );
+      }
+    }
+  }
+
+  Future<void> _syncDerivatives() async {
+    // Show loading dialog
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 20),
+            Text('Syncing derivatives...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      print('[FileDerivatives] Starting derivative sync for file ${widget.file.id}');
+
+      // Regenerate hashes for this file's derivatives
+      print('[FileDerivatives] Regenerating derivative hashes...');
+      await _storage.regenerateDerivativeHashes();
+
+      // Get derivatives for this file that need content
+      final allDerivativesNeedingContent = await _storage.getDerivativesNeedingContent();
+      final fileDerivativesNeedingContent = allDerivativesNeedingContent
+          .where((d) => d.fileId == widget.file.id)
+          .toList();
+
+      if (fileDerivativesNeedingContent.isEmpty) {
+        print('[FileDerivatives] All derivatives for this file already have content');
+        if (mounted) {
+          Navigator.pop(context); // Close loading dialog
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('All derivatives already synced!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+        return;
+      }
+
+      print('[FileDerivatives] Found ${fileDerivativesNeedingContent.length} derivative(s) needing sync');
+
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Found ${fileDerivativesNeedingContent.length} derivative(s) missing. '
+              'Please run a full device sync to transfer them.',
+            ),
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'OK',
+              onPressed: () {},
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      print('[FileDerivatives] Error during derivative sync: $e');
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sync failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _deleteDerivative(DerivativeArtifact derivative) async {
@@ -241,6 +410,15 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
                               case 'share':
                                 _shareFile();
                                 break;
+                              case 'share_external':
+                                _shareFileExternal();
+                                break;
+                              case 'share_chat':
+                                _shareFileWithChat();
+                                break;
+                              case 'sync':
+                                _syncDerivatives();
+                                break;
                             }
                           },
                           itemBuilder: (context) => [
@@ -256,7 +434,31 @@ class _FileDerivativesScreenState extends State<FileDerivativesScreen> {
                               value: 'share',
                               child: ListTile(
                                 leading: Icon(Icons.share),
-                                title: Text('Share'),
+                                title: Text('Share with Apps'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'share_external',
+                              child: ListTile(
+                                leading: Icon(Icons.share_outlined),
+                                title: Text('Share Externally'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'share_chat',
+                              child: ListTile(
+                                leading: Icon(Icons.chat),
+                                title: Text('Share with Chat'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'sync',
+                              child: ListTile(
+                                leading: Icon(Icons.sync),
+                                title: Text('Sync Derivatives'),
                                 contentPadding: EdgeInsets.zero,
                               ),
                             ),

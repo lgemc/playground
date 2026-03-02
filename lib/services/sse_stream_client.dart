@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'dart:io';
 
 /// A chunk from the SSE stream with separate reasoning and content
 class StreamChunk {
@@ -37,7 +37,7 @@ class SseStreamClient {
   SseStreamClient({
     required this.baseUrl,
     required this.apiKey,
-    this.timeout = const Duration(seconds: 120),
+    this.timeout = const Duration(seconds: 600),
   });
 
   /// Stream chat completions with proper handling of both content and reasoning_content.
@@ -62,26 +62,31 @@ class SseStreamClient {
       if (includeReasoning) 'include_reasoning': true,
     };
 
-    final request = http.Request('POST', url);
-    request.headers['Content-Type'] = 'application/json';
-    request.headers['Accept'] = 'text/event-stream';
-    if (apiKey.isNotEmpty) {
-      request.headers['Authorization'] = 'Bearer $apiKey';
-    }
-    request.body = jsonEncode(payload);
+    final client = HttpClient();
+    // Set connection timeout to allow long-running requests
+    client.connectionTimeout = timeout;
+    // Set idle timeout to prevent connection closing during slow responses
+    client.idleTimeout = timeout;
 
-    final client = http.Client();
     try {
-      final response = await client.send(request).timeout(timeout);
+      final request = await client.postUrl(url);
+      request.headers.set('Content-Type', 'application/json');
+      request.headers.set('Accept', 'text/event-stream');
+      if (apiKey.isNotEmpty) {
+        request.headers.set('Authorization', 'Bearer $apiKey');
+      }
+
+      request.write(jsonEncode(payload));
+      final response = await request.close();
 
       if (response.statusCode != 200) {
-        final body = await response.stream.bytesToString();
+        final body = await response.transform(utf8.decoder).join();
         throw Exception('HTTP ${response.statusCode}: $body');
       }
 
       // Parse SSE stream
       final lineBuffer = StringBuffer();
-      await for (final chunk in response.stream.transform(utf8.decoder)) {
+      await for (final chunk in response.transform(utf8.decoder)) {
         lineBuffer.write(chunk);
 
         // Process complete lines

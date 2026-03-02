@@ -141,7 +141,7 @@ class QueueConfigs {
       name: 'Summary Processor',
       eventPatterns: ['summary.create'],
       maxRetries: 3,
-      lockTimeoutSeconds: 120, // Summaries can take longer
+      lockTimeoutSeconds: 600, // Summaries can take longer (10 minutes)
     ),
     // Queue for log events
     QueueConfig(
@@ -181,7 +181,15 @@ class QueueConfigs {
       name: 'Concept Extraction Processor',
       eventPatterns: ['activity.extract_concepts', 'derivative.completed'],
       maxRetries: 3,
-      lockTimeoutSeconds: 120, // AI concept extraction can take time
+      lockTimeoutSeconds: 600, // AI concept extraction can take time (10 minutes)
+    ),
+    // Queue for vocabulary audio generation
+    QueueConfig(
+      id: 'vocabulary-audio',
+      name: 'Vocabulary Audio Generator',
+      eventPatterns: ['vocabulary.audio_generate'],
+      maxRetries: 3,
+      lockTimeoutSeconds: 300, // Audio generation can take time (5 minutes)
     ),
     // Catch-all queue for unmatched events (disabled by default)
     QueueConfig(

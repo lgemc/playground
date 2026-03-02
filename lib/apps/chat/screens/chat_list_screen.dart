@@ -4,6 +4,7 @@ import '../services/chat_storage.dart';
 import 'chat_detail_screen.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/app_bus.dart';
+import '../../../core/app_event.dart';
 
 class ChatListScreen extends StatefulWidget {
   const ChatListScreen({Key? key}) : super(key: key);
@@ -36,9 +37,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void _subscribeToChatEvents() {
     AppBus.instance.subscribe(
       id: 'chat_list_screen',
-      eventTypes: ['chat:title_generated'],
+      eventTypes: ['chat:title_generated', 'chat.created', 'chat.updated', 'chat.deleted'],
       callback: (event) async {
-        // Refresh the chat list when any title is generated
+        // Refresh the chat list when chats change
         await _loadChats();
       },
     );
@@ -96,29 +97,43 @@ class _ChatListScreenState extends State<ChatListScreen> {
     }
   }
 
-  Future<void> _restartChat(Chat chat) async {
-    await ChatStorage.instance.deleteMessages(chat.id);
+  Future<void> _regenerateTitle(Chat chat) async {
+    print('[ChatList] _regenerateTitle called for chat: ${chat.id}');
 
-    final restartedChat = chat.copyWith(
+    // Verify chat exists before regenerating
+    final existingChat = await ChatStorage.instance.getChat(chat.id);
+    if (existingChat == null) {
+      print('[ChatList] ERROR: Cannot regenerate title - chat ${chat.id} not found in database!');
+      print('[ChatList] This was a ghost entry. Refreshing list...');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Chat not found. List refreshed.')),
+        );
+      }
+      await _loadChats(); // Refresh list to remove ghost entries
+      return;
+    }
+
+    print('[ChatList] Chat found, proceeding with title regeneration');
+    final updatedChat = chat.copyWith(
       title: 'Generating title...',
-      updatedAt: DateTime.now(),
       isTitleGenerating: true,
     );
 
-    await ChatStorage.instance.updateChat(restartedChat);
+    await ChatStorage.instance.updateChat(updatedChat);
     await _loadChats();
 
-    if (mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ChatDetailScreen(
-            chat: restartedChat,
-            onChatUpdated: _loadChats,
-          ),
-        ),
-      );
-    }
+    // Emit event to trigger title generation
+    print('[ChatList] Emitting chat.title_generate event for: ${chat.id}');
+    final event = AppEvent.create(
+      type: 'chat.title_generate',
+      appId: 'chat',
+      metadata: {
+        'chatId': chat.id,
+      },
+    );
+    await AppBus.instance.emit(event);
+    print('[ChatList] Event emitted successfully');
   }
 
   Future<void> _deleteChat(Chat chat) async {
@@ -171,7 +186,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                           alignment: Alignment.centerLeft,
                           padding: const EdgeInsets.only(left: 20),
                           color: Colors.blue,
-                          child: const Icon(Icons.refresh, color: Colors.white),
+                          child: const Icon(Icons.title, color: Colors.white),
                         ),
                         secondaryBackground: Container(
                           alignment: Alignment.centerRight,
@@ -204,35 +219,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
                               ),
                             );
                           } else {
-                            return await showDialog<bool>(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text('Restart Chat'),
-                                content: const Text(
-                                    'This will clear all messages. Are you sure?'),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(false),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(true),
-                                    style: TextButton.styleFrom(
-                                        foregroundColor: Colors.blue),
-                                    child: const Text('Restart'),
-                                  ),
-                                ],
-                              ),
-                            );
+                            // Regenerate title - call directly and prevent dismissal
+                            _regenerateTitle(chat);
+                            return false;
                           }
                         },
                         onDismissed: (direction) {
+                          // Only handle delete; regenerate is handled in confirmDismiss
                           if (direction == DismissDirection.endToStart) {
                             _deleteChat(chat);
-                          } else {
-                            _restartChat(chat);
                           }
                         },
                         child: Card(

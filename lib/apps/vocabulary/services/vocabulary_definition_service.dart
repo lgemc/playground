@@ -3,6 +3,8 @@ import '../../../services/config_service.dart';
 import '../../../services/logger.dart';
 import '../../../services/queue_consumer.dart';
 import '../../../services/queue_message.dart';
+import '../../../core/app_bus.dart';
+import '../../../core/app_event.dart';
 import '../vocabulary_app.dart';
 import 'vocabulary_storage.dart';
 import 'vocabulary_streaming_service.dart';
@@ -124,6 +126,23 @@ class VocabularyDefinitionService extends QueueConsumer {
             'word': wordText,
             'meaningLength': result.meaning.length,
             'phrasesCount': result.samplePhrases.length,
+          },
+        );
+
+        // Emit audio generation event (only wordId - service will retrieve data)
+        await AppBus.instance.emit(AppEvent.create(
+          type: 'vocabulary.audio_generate',
+          appId: 'vocabulary',
+          metadata: {
+            'wordId': wordId,
+          },
+        ));
+
+        await _logger.info(
+          'Emitted audio generation event',
+          eventType: 'audio_event_emit',
+          metadata: {
+            'wordId': wordId,
           },
         );
 

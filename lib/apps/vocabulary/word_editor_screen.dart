@@ -1,8 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 import '../../services/logger.dart';
+import '../../core/app_bus.dart';
+import '../../core/app_event.dart';
+import '../file_system/services/file_system_storage.dart';
 import 'models/word.dart';
 import 'services/vocabulary_storage.dart';
 import 'services/vocabulary_streaming_service.dart';
@@ -35,6 +40,10 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
   // Streaming support
   StreamSubscription<DefinitionStreamUpdate>? _streamSubscription;
   bool _isGenerating = false;
+
+  // Audio playback
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String? _currentlyPlayingPath;
 
   @override
   void initState() {
@@ -111,6 +120,7 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
   void dispose() {
     _streamSubscription?.cancel();
     _debounceTimer?.cancel();
+    _audioPlayer.dispose();
     _wordController.removeListener(_onChanged);
     _wordController.dispose();
     _meaningController.removeListener(_onChanged);
@@ -123,6 +133,108 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
       _saveWord();
     }
     super.dispose();
+  }
+
+  Future<void> _playAudio(String relativePath) async {
+    try {
+      // Stop currently playing audio if any
+      if (_currentlyPlayingPath != null) {
+        await _audioPlayer.stop();
+      }
+
+      // Convert relative path to absolute path
+      final storageDir = FileSystemStorage.instance.storageDir;
+      final absolutePath = '${storageDir.path}/$relativePath';
+      final file = File(absolutePath);
+
+      if (await file.exists()) {
+        await _audioPlayer.play(DeviceFileSource(absolutePath));
+        setState(() {
+          _currentlyPlayingPath = relativePath;
+        });
+
+        // Listen for completion to reset state
+        _audioPlayer.onPlayerComplete.listen((_) {
+          if (mounted) {
+            setState(() {
+              _currentlyPlayingPath = null;
+            });
+          }
+        });
+      } else {
+        _logger.warning(
+          'Audio file not found',
+          eventType: 'audio_file_not_found',
+          metadata: {'relativePath': relativePath, 'absolutePath': absolutePath},
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Audio file not found')),
+          );
+        }
+      }
+    } catch (e) {
+      _logger.error(
+        'Error playing audio: $e',
+        eventType: 'audio_playback_error',
+        metadata: {'relativePath': relativePath, 'error': e.toString()},
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error playing audio: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _stopAudio() async {
+    await _audioPlayer.stop();
+    setState(() {
+      _currentlyPlayingPath = null;
+    });
+  }
+
+  Future<void> _generateAudio() async {
+    if (widget.word.meaning.isEmpty || widget.word.samplePhrases.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please generate meaning and sample phrases first'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Emit audio generation event with only wordId
+      await AppBus.instance.emit(AppEvent.create(
+        type: 'vocabulary.audio_generate',
+        appId: 'vocabulary',
+        metadata: {
+          'wordId': widget.word.id,
+        },
+      ));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Audio generation queued. Check back in a moment.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      _logger.error(
+        'Error queuing audio generation: $e',
+        eventType: 'audio_generation_queue_error',
+        metadata: {'wordId': widget.word.id, 'error': e.toString()},
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
   }
 
   void _onChanged() {
@@ -241,6 +353,13 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
           ),
           title: Text(widget.isNew ? 'New Word' : 'Edit Word'),
           actions: [
+            // Generate audio button
+            if (!widget.isNew && widget.word.meaning.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.volume_up),
+                tooltip: 'Generate audio',
+                onPressed: _generateAudio,
+              ),
             if (_isSaving)
               const Padding(
                 padding: EdgeInsets.all(16),
@@ -267,10 +386,30 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
           children: [
             TextField(
               controller: _wordController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Word',
                 hintText: 'Enter the word',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
+                suffixIcon: widget.word.wordAudioPath != null
+                    ? IconButton(
+                        icon: Icon(
+                          _currentlyPlayingPath == widget.word.wordAudioPath
+                              ? Icons.stop_circle
+                              : Icons.play_circle,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        tooltip: _currentlyPlayingPath == widget.word.wordAudioPath
+                            ? 'Stop audio'
+                            : 'Play word pronunciation',
+                        onPressed: () {
+                          if (_currentlyPlayingPath == widget.word.wordAudioPath) {
+                            _stopAudio();
+                          } else {
+                            _playAudio(widget.word.wordAudioPath!);
+                          }
+                        },
+                      )
+                    : null,
               ),
               style: Theme.of(context).textTheme.headlineSmall,
               textCapitalization: TextCapitalization.none,
@@ -373,6 +512,10 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
               )
             else if (_phraseControllers.isNotEmpty)
               ...List.generate(_phraseControllers.length, (index) {
+                final hasAudio = index < widget.word.sampleAudioPaths.length &&
+                    widget.word.sampleAudioPaths[index].isNotEmpty;
+                final audioPath = hasAudio ? widget.word.sampleAudioPaths[index] : null;
+
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: TextField(
@@ -380,6 +523,26 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
                     decoration: InputDecoration(
                       labelText: 'Phrase ${index + 1}',
                       border: const OutlineInputBorder(),
+                      suffixIcon: hasAudio
+                          ? IconButton(
+                              icon: Icon(
+                                _currentlyPlayingPath == audioPath
+                                    ? Icons.stop_circle
+                                    : Icons.play_circle,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              tooltip: _currentlyPlayingPath == audioPath
+                                  ? 'Stop audio'
+                                  : 'Play phrase',
+                              onPressed: () {
+                                if (_currentlyPlayingPath == audioPath) {
+                                  _stopAudio();
+                                } else {
+                                  _playAudio(audioPath!);
+                                }
+                              },
+                            )
+                          : null,
                     ),
                     minLines: 2,
                     maxLines: null,

@@ -1,9 +1,12 @@
+import 'dart:convert';
+
 class Message {
   final String id;
   final String chatId;
   final String content;
   final bool isUser;
   final DateTime createdAt;
+  final Map<String, dynamic>? metadata; // Store tool results, attachments, etc.
 
   Message({
     required this.id,
@@ -11,6 +14,7 @@ class Message {
     required this.content,
     required this.isUser,
     required this.createdAt,
+    this.metadata,
   });
 
   Map<String, dynamic> toMap() {
@@ -20,6 +24,7 @@ class Message {
       'content': content,
       'isUser': isUser ? 1 : 0,
       'createdAt': createdAt.toIso8601String(),
+      'metadata': metadata != null ? jsonEncode(metadata) : null,
     };
   }
 
@@ -30,6 +35,9 @@ class Message {
       content: map['content'] as String,
       isUser: (map['isUser'] as int) == 1,
       createdAt: DateTime.parse(map['createdAt'] as String),
+      metadata: map['metadata'] != null
+          ? jsonDecode(map['metadata'] as String) as Map<String, dynamic>
+          : null,
     );
   }
 
@@ -39,6 +47,7 @@ class Message {
     String? content,
     bool? isUser,
     DateTime? createdAt,
+    Map<String, dynamic>? metadata,
   }) {
     return Message(
       id: id ?? this.id,
@@ -46,6 +55,7 @@ class Message {
       content: content ?? this.content,
       isUser: isUser ?? this.isUser,
       createdAt: createdAt ?? this.createdAt,
+      metadata: metadata ?? this.metadata,
     );
   }
 }

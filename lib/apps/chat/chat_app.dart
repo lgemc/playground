@@ -43,25 +43,44 @@ class ChatApp extends SubApp {
   Future<void> onReceiveShare(ShareContent content) async {
     if (content.type == ShareContentType.text) {
       final text = content.data['text'] as String? ?? '';
-      if (text.isNotEmpty) {
+      final fileName = content.data['fileName'] as String?;
+      final isFileContent = content.data['isFileContent'] as bool? ?? false;
+      final isDerivativeContent = content.data['isDerivativeContent'] as bool? ?? false;
+
+      if (text.isNotEmpty || isFileContent || isDerivativeContent) {
         // Create a new chat with the shared text as the first message
         final now = DateTime.now();
         final chatId = now.millisecondsSinceEpoch.toString();
 
+        // Generate title based on source
+        String title;
+        if (isFileContent || isDerivativeContent) {
+          title = fileName ?? 'Shared Content';
+        } else {
+          title = 'Shared: ${text.length > 30 ? '${text.substring(0, 30)}...' : text}';
+        }
+
         final chat = Chat(
           id: chatId,
-          title: 'Shared: ${text.length > 30 ? '${text.substring(0, 30)}...' : text}',
+          title: title,
           createdAt: now,
           updatedAt: now,
+          isTitleGenerating: false, // Don't generate title for file shares
         );
         await ChatStorage.instance.createChat(chat);
 
+        // Create user message with the shared content
         final message = Message(
           id: '${chatId}_0',
           chatId: chatId,
-          content: text,
+          content: text.isNotEmpty ? text : 'Shared file: $fileName',
           isUser: true,
           createdAt: now,
+          metadata: {
+            'isFileContent': isFileContent,
+            'isDerivativeContent': isDerivativeContent,
+            'fileName': fileName,
+          },
         );
         await ChatStorage.instance.createMessage(message);
       }

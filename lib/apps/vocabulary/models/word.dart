@@ -6,6 +6,8 @@ class Word {
   final List<String> samplePhrases;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String? wordAudioPath;
+  final List<String> sampleAudioPaths;
 
   Word({
     required this.id,
@@ -14,6 +16,8 @@ class Word {
     required this.samplePhrases,
     required this.createdAt,
     required this.updatedAt,
+    this.wordAudioPath,
+    this.sampleAudioPaths = const [],
   });
 
   Word copyWith({
@@ -23,6 +27,8 @@ class Word {
     List<String>? samplePhrases,
     DateTime? createdAt,
     DateTime? updatedAt,
+    String? wordAudioPath,
+    List<String>? sampleAudioPaths,
   }) {
     return Word(
       id: id ?? this.id,
@@ -31,6 +37,8 @@ class Word {
       samplePhrases: samplePhrases ?? this.samplePhrases,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      wordAudioPath: wordAudioPath ?? this.wordAudioPath,
+      sampleAudioPaths: sampleAudioPaths ?? this.sampleAudioPaths,
     );
   }
 
@@ -54,6 +62,8 @@ class Word {
       'samplePhrases': samplePhrases,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
+      'wordAudioPath': wordAudioPath,
+      'sampleAudioPaths': sampleAudioPaths,
     };
   }
 
@@ -68,6 +78,11 @@ class Word {
           [],
       createdAt: DateTime.parse(json['createdAt'] as String),
       updatedAt: DateTime.parse(json['updatedAt'] as String),
+      wordAudioPath: json['wordAudioPath'] as String?,
+      sampleAudioPaths: (json['sampleAudioPaths'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:share_plus/share_plus.dart';
 import 'dart:io';
 import '../models/file_item.dart';
 import '../models/folder_item.dart';
@@ -13,6 +14,7 @@ import 'pdf_reader_screen.dart';
 import 'file_derivatives_screen.dart';
 import 'markdown_editor_screen.dart';
 import 'markdown_file_editor_screen.dart';
+import 'image_viewer_screen.dart';
 import '../../video_viewer/screens/video_player_screen.dart';
 import '../widgets/folder_picker_dialog.dart';
 import '../../../services/share_service.dart';
@@ -22,6 +24,7 @@ import '../../../services/generators/auto_title_generator.dart';
 import '../../../services/generators/readme_generator.dart';
 import '../../../services/derivative_service.dart';
 import '../../../core/database/crdt_database.dart';
+import '../../../core/app_registry.dart';
 
 class FileBrowserScreen extends StatefulWidget {
   final String? initialPath;
@@ -180,6 +183,79 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
+  Future<void> _syncFileDerivatives(FileItem file) async {
+    // Show loading dialog
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 20),
+            Text('Checking derivatives...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      print('[FileBrowser] Starting derivative sync check for file ${file.id}');
+
+      // Regenerate hashes for all derivatives
+      print('[FileBrowser] Regenerating derivative hashes...');
+      await FileSystemStorage.instance.regenerateDerivativeHashes();
+
+      // Get derivatives for this file that need content
+      final allDerivativesNeedingContent = await FileSystemStorage.instance.getDerivativesNeedingContent();
+      final fileDerivativesNeedingContent = allDerivativesNeedingContent
+          .where((d) => d.fileId == file.id)
+          .toList();
+
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+
+        if (fileDerivativesNeedingContent.isEmpty) {
+          print('[FileBrowser] All derivatives for this file already have content');
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('All derivatives already synced!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          print('[FileBrowser] Found ${fileDerivativesNeedingContent.length} derivative(s) needing sync');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Found ${fileDerivativesNeedingContent.length} derivative(s) missing. '
+                'Please run a full device sync to transfer them.',
+              ),
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'OK',
+                onPressed: () {},
+              ),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('[FileBrowser] Error during derivative sync check: $e');
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sync check failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   void _showFileContextMenu(FileItem file) {
     // Check if file can be auto-titled (PDF or Markdown)
     final canAutoTitle = file.name.toLowerCase().endsWith('.pdf') ||
@@ -214,6 +290,14 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
               );
             },
           ),
+          ListTile(
+            leading: const Icon(Icons.sync),
+            title: const Text('Sync Derivatives'),
+            onTap: () {
+              Navigator.pop(context);
+              _syncFileDerivatives(file);
+            },
+          ),
           if (canAutoTitle)
             ListTile(
               leading: const Icon(Icons.drive_file_rename_outline),
@@ -233,10 +317,26 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.share),
-            title: const Text('Share'),
+            title: const Text('Share with Apps'),
             onTap: () {
               Navigator.pop(context);
               _shareFile(file);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.share_outlined),
+            title: const Text('Share Externally'),
+            onTap: () {
+              Navigator.pop(context);
+              _shareFileExternal(file);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.chat),
+            title: const Text('Share with Chat'),
+            onTap: () {
+              Navigator.pop(context);
+              _shareWithChat(file);
             },
           ),
           ListTile(
@@ -481,6 +581,59 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     await ShareService.instance.share(context, content);
   }
 
+  Future<void> _shareFileExternal(FileItem file) async {
+    final filePath = FileSystemStorage.instance.getAbsolutePath(file);
+    final xFile = XFile(filePath, mimeType: file.mimeType);
+
+    await Share.shareXFiles(
+      [xFile],
+      subject: file.name,
+    );
+  }
+
+  Future<void> _shareWithChat(FileItem file) async {
+    // Read file content if it's a markdown file
+    String contentToShare = '';
+
+    if (file.extension.toLowerCase() == 'md') {
+      final filePath = FileSystemStorage.instance.getAbsolutePath(file);
+      final physicalFile = File(filePath);
+
+      if (await physicalFile.exists()) {
+        contentToShare = await physicalFile.readAsString();
+      }
+    }
+
+    // Create share content with special marker for chat
+    final content = ShareContent.create(
+      type: ShareContentType.text,
+      sourceAppId: 'file_system',
+      data: {
+        'text': contentToShare,
+        'fileName': file.name,
+        'fileId': file.id,
+        'isFileContent': true,
+      },
+    );
+
+    // Share directly to chat app
+    final chatApp = AppRegistry.instance.getApp('chat');
+    if (chatApp != null) {
+      await ShareService.instance.shareTo('chat', content);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Shared with Chat')),
+        );
+
+        // Navigate to chat app
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => chatApp.build(context)),
+        );
+      }
+    }
+  }
+
   Future<void> _openFile(FileItem file) async {
     // Check if file has derivatives
     final hasDerivatives =
@@ -533,6 +686,18 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         context,
         MaterialPageRoute(
           builder: (context) => PdfReaderScreen(
+            filePath: filePath,
+            fileName: file.name,
+          ),
+        ),
+      );
+    } else if (ext == 'png' || ext == 'jpg' || ext == 'jpeg' ||
+               ext == 'gif' || ext == 'webp' || ext == 'bmp') {
+      // Image files
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ImageViewerScreen(
             filePath: filePath,
             fileName: file.name,
           ),
