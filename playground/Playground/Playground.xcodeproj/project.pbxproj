@@ -6,6 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AD46D2822F55FC4D008EF85F /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D0742F560000008EF85F /* GRDB */; };
+		AD46D2832F55FC4D008EF85F /* Alamofire in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D0762F560000008EF85F /* Alamofire */; };
+		AD46D2842F55FC4D008EF85F /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D0782F560000008EF85F /* MLX */; };
+		AD46D2852F55FC4D008EF85F /* MLXNN in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D07A2F560000008EF85F /* MLXNN */; };
+		AD46D2862F55FC4D008EF85F /* MLXRandom in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D07C2F560000008EF85F /* MLXRandom */; };
+		AD46D2872F55FC4D008EF85F /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D07E2F560000008EF85F /* MLXLLM */; };
+		AD46D2882F55FC4D008EF85F /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D0802F560000008EF85F /* MLXLMCommon */; };
+		AD46D2892F55FC4D008EF85F /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D0822F560000008EF85F /* WhisperKit */; };
+		AD46D28A2F55FC4D008EF85F /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08A2F560000008EF85F /* MLXAudioTTS */; };
+		AD46D28B2F55FC4D008EF85F /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08B2F560000008EF85F /* MLXAudioCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		AD46D0662F55F1FF008EF85F /* Playground.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Playground.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +36,16 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AD46D2892F55FC4D008EF85F /* WhisperKit in Frameworks */,
+				AD46D2882F55FC4D008EF85F /* MLXLMCommon in Frameworks */,
+				AD46D2872F55FC4D008EF85F /* MLXLLM in Frameworks */,
+				AD46D2862F55FC4D008EF85F /* MLXRandom in Frameworks */,
+				AD46D2852F55FC4D008EF85F /* MLXNN in Frameworks */,
+				AD46D2842F55FC4D008EF85F /* MLX in Frameworks */,
+				AD46D2832F55FC4D008EF85F /* Alamofire in Frameworks */,
+				AD46D2822F55FC4D008EF85F /* GRDB in Frameworks */,
+				AD46D28A2F55FC4D008EF85F /* MLXAudioTTS in Frameworks */,
+				AD46D28B2F55FC4D008EF85F /* MLXAudioCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +88,16 @@
 			);
 			name = Playground;
 			packageProductDependencies = (
+				AD46D0742F560000008EF85F /* GRDB */,
+				AD46D0762F560000008EF85F /* Alamofire */,
+				AD46D0782F560000008EF85F /* MLX */,
+				AD46D07A2F560000008EF85F /* MLXNN */,
+				AD46D07C2F560000008EF85F /* MLXRandom */,
+				AD46D07E2F560000008EF85F /* MLXLLM */,
+				AD46D0802F560000008EF85F /* MLXLMCommon */,
+				AD46D0822F560000008EF85F /* WhisperKit */,
+				AD46D08A2F560000008EF85F /* MLXAudioTTS */,
+				AD46D08B2F560000008EF85F /* MLXAudioCore */,
 			);
 			productName = Playground;
 			productReference = AD46D0662F55F1FF008EF85F /* Playground.app */;
@@ -94,6 +127,14 @@
 			);
 			mainGroup = AD46D05D2F55F1FF008EF85F;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AD46D0842F560000008EF85F /* XCRemoteSwiftPackageReference "GRDB.swift" */,
+				AD46D0852F560000008EF85F /* XCRemoteSwiftPackageReference "Alamofire" */,
+				AD46D0862F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift" */,
+				AD46D0872F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				AD46D0882F560000008EF85F /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				AD46D0892F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AD46D0672F55F1FF008EF85F /* Products */;
 			projectDirPath = "";
@@ -261,10 +302,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = atelier.Playground;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -278,7 +319,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 26.1;
+				XROS_DEPLOYMENT_TARGET = 1.0;
 			};
 			name = Debug;
 		};
@@ -304,10 +345,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = atelier.Playground;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -321,7 +362,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 26.1;
+				XROS_DEPLOYMENT_TARGET = 1.0;
 			};
 			name = Release;
 		};
@@ -347,6 +388,110 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AD46D0842F560000008EF85F /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.24.0;
+			};
+		};
+		AD46D0852F560000008EF85F /* XCRemoteSwiftPackageReference "Alamofire" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Alamofire/Alamofire.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.8.0;
+			};
+		};
+		AD46D0862F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.30.0;
+			};
+		};
+		AD46D0872F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.29.1;
+			};
+		};
+		AD46D0882F560000008EF85F /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
+		AD46D0892F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-audio-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Blaizzy/mlx-audio-swift.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AD46D0742F560000008EF85F /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0842F560000008EF85F /* XCRemoteSwiftPackageReference "GRDB.swift" */;
+			productName = GRDB;
+		};
+		AD46D0762F560000008EF85F /* Alamofire */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0852F560000008EF85F /* XCRemoteSwiftPackageReference "Alamofire" */;
+			productName = Alamofire;
+		};
+		AD46D0782F560000008EF85F /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0862F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLX;
+		};
+		AD46D07A2F560000008EF85F /* MLXNN */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0862F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLXNN;
+		};
+		AD46D07C2F560000008EF85F /* MLXRandom */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0862F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLXRandom;
+		};
+		AD46D07E2F560000008EF85F /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0872F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLLM;
+		};
+		AD46D0802F560000008EF85F /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0872F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		AD46D0822F560000008EF85F /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0882F560000008EF85F /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			productName = WhisperKit;
+		};
+		AD46D08A2F560000008EF85F /* MLXAudioTTS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0892F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioTTS;
+		};
+		AD46D08B2F560000008EF85F /* MLXAudioCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0892F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AD46D05E2F55F1FF008EF85F /* Project object */;
 }
