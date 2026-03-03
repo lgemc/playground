@@ -44,6 +44,18 @@ struct AppBusEvent: Codable, Identifiable {
 // GRDB conformance
 extension AppBusEvent: FetchableRecord, PersistableRecord {
     static let databaseTableName = "app_bus_events"
+
+    enum Columns {
+        static let id = Column(CodingKeys.id)
+        static let type = Column(CodingKeys.type)
+        static let appId = Column(CodingKeys.appId)
+        static let payload = Column(CodingKeys.payload)
+        static let timestamp = Column(CodingKeys.timestamp)
+    }
+
+    // Map Swift camelCase to database snake_case
+    static let databaseColumnEncodingStrategy = DatabaseColumnEncodingStrategy.convertToSnakeCase
+    static let databaseColumnDecodingStrategy = DatabaseColumnDecodingStrategy.convertFromSnakeCase
 }
 
 /// Pub/Sub event bus for inter-app communication

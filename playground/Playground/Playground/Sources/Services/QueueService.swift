@@ -52,19 +52,25 @@ class QueueService {
     private func handleBusEvent(_ event: AppBusEvent) async {
         let matchingQueues = QueueConfigs.getMatchingQueues(event.type)
 
+        if !matchingQueues.isEmpty {
+            print("📬 [QueueService] Routing event '\(event.type)' to \(matchingQueues.count) queue(s)")
+        }
+
         for queueConfig in matchingQueues {
             do {
-                _ = try await enqueueMessage(
+                let message = try await enqueueMessage(
                     queueId: queueConfig.id,
                     eventType: event.type,
                     appId: event.appId ?? "unknown",
                     payload: event.getPayload()
                 )
 
+                print("✅ [QueueService] Enqueued message to '\(queueConfig.name)' (id: \(message.id))")
+
                 // Notify subscribers
                 await notifySubscribers(queueId: queueConfig.id)
             } catch {
-                print("❌ Failed to enqueue message for queue \(queueConfig.id): \(error)")
+                print("❌ [QueueService] Failed to enqueue message for queue \(queueConfig.id): \(error)")
             }
         }
     }
@@ -78,8 +84,9 @@ class QueueService {
         appId: String,
         payload: [String: Any]?
     ) async throws -> QueueMessage {
+        // Use UUID to ensure uniqueness even when messages are created rapidly
         let message = QueueMessage(
-            id: "\(Int(Date().timeIntervalSince1970 * 1000))_\(queueId)_\(appId.hashValue)",
+            id: UUID().uuidString,
             queueId: queueId,
             eventType: eventType,
             appId: appId,

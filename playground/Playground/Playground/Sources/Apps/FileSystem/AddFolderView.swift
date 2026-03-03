@@ -237,16 +237,40 @@ struct AddFolderView: View {
     }
 
     private func addSingleFile(_ fileURL: URL) async throws {
-        // Get file info
+        // Get file info from original location
         let fileInfo = try FileExtractionService.shared.getFileInfo(at: fileURL.path)
+
+        // Create app's files directory structure
+        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let filesDirectory = documentsURL.appendingPathComponent("Files")
+
+        // Create the Files directory if it doesn't exist
+        try FileManager.default.createDirectory(at: filesDirectory, withIntermediateDirectories: true)
+
+        // Create destination URL with unique name if file already exists
+        var destinationURL = filesDirectory.appendingPathComponent(fileInfo.name)
+        var counter = 1
+        while FileManager.default.fileExists(atPath: destinationURL.path) {
+            let nameWithoutExt = (fileInfo.name as NSString).deletingPathExtension
+            let ext = (fileInfo.name as NSString).pathExtension
+            let uniqueName = ext.isEmpty ? "\(nameWithoutExt)_\(counter)" : "\(nameWithoutExt)_\(counter).\(ext)"
+            destinationURL = filesDirectory.appendingPathComponent(uniqueName)
+            counter += 1
+        }
+
+        // Copy file to app's storage
+        try FileManager.default.copyItem(at: fileURL, to: destinationURL)
+
+        print("✅ Copied file to: \(destinationURL.path)")
 
         // Detect MIME type
         let mimeType = detectMimeType(fileExtension: fileInfo.fileExtension)
 
-        // Create file in storage
+        // Create file in storage with the new internal path (imported files go to root folder)
         let fileResult = FileStorage.shared.createFile(
-            name: fileInfo.name,
-            path: fileURL.path,
+            name: destinationURL.lastPathComponent,
+            path: destinationURL.path,
+            folderPath: "",
             mimeType: mimeType,
             sizeBytes: fileInfo.size
         )

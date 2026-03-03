@@ -92,7 +92,7 @@ struct FileListView: View {
         }
         .sheet(isPresented: $showingAddFile) {
             NavigationStack {
-                AddFileView(onFileAdded: loadFiles)
+                AddFileView(folderPath: "", onFileAdded: loadFiles)
             }
         }
         .sheet(isPresented: $showingAddFolder) {

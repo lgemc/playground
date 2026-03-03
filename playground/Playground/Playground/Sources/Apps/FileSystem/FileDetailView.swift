@@ -8,10 +8,16 @@ struct FileDetailView: View {
     @State private var showingDeleteAlert = false
     @State private var isExtracting = false
     @State private var extractionError: String?
+    @State private var availableGenerators: [DerivativeGenerator] = []
+    @State private var generatingDerivatives: Set<String> = []
+    @State private var derivativeErrors: [String: String] = [:]
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         List {
+            // Show preview for supported file types
+            viewerSection
+
             Section("File Information") {
                 HStack {
                     Image(systemName: file.iconName)
@@ -57,6 +63,9 @@ struct FileDetailView: View {
                         .foregroundColor(.secondary)
                 }
             }
+
+            // Derivatives section
+            derivativesSection
 
             // Extracted text section
             if let extractedText = file.extractedText {
@@ -128,6 +137,89 @@ struct FileDetailView: View {
         } message: {
             Text("Are you sure you want to delete '\(file.name)'? This action cannot be undone.")
         }
+        .onAppear(perform: loadAvailableGenerators)
+    }
+
+    // MARK: - Viewer Section
+
+    @ViewBuilder
+    private var viewerSection: some View {
+        let ext = file.fileExtension.lowercased()
+
+        if ext == "pdf" {
+            Section {
+                NavigationLink(destination: PDFViewerView(file: file)) {
+                    HStack {
+                        Image(systemName: "doc.text.fill")
+                            .foregroundColor(.orange)
+                        Text("View PDF")
+                    }
+                }
+            }
+        } else if ["mp4", "mov", "avi", "m4v"].contains(ext) {
+            Section {
+                NavigationLink(destination: VideoPlayerView(file: file)) {
+                    HStack {
+                        Image(systemName: "play.circle.fill")
+                            .foregroundColor(.orange)
+                        Text("Play Video")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Derivatives Section
+
+    @ViewBuilder
+    private var derivativesSection: some View {
+        if !availableGenerators.isEmpty {
+            Section("Derivatives") {
+                ForEach(availableGenerators, id: \.type) { generator in
+                    derivativeRow(for: generator)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func derivativeRow(for generator: DerivativeGenerator) -> some View {
+        let isGenerating = generatingDerivatives.contains(generator.type)
+        let error = derivativeErrors[generator.type]
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: generator.icon)
+                    .foregroundColor(.blue)
+
+                Text(generator.displayName)
+
+                Spacer()
+
+                if isGenerating {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else {
+                    Button(action: {
+                        generateDerivative(generator: generator)
+                    }) {
+                        Text("Generate")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                    }
+                }
+            }
+
+            if let error = error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
     }
 
     private func extractText() {
@@ -164,6 +256,46 @@ struct FileDetailView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+
+    // MARK: - Derivatives
+
+    private func loadAvailableGenerators() {
+        // Convert File to FileItem
+        let fileItem = FileItem(
+            id: file.id,
+            path: file.path,
+            name: file.name,
+            mimeType: file.mimeType,
+            size: file.sizeBytes,
+            createdAt: file.createdAt,
+            updatedAt: file.updatedAt
+        )
+
+        // Get available generators for this file
+        availableGenerators = DerivativeService.shared.getAvailableGenerators(for: fileItem)
+    }
+
+    private func generateDerivative(generator: DerivativeGenerator) {
+        generatingDerivatives.insert(generator.type)
+        derivativeErrors.removeValue(forKey: generator.type)
+
+        // Request derivative generation through the queue system
+        DerivativeService.shared.requestDerivative(
+            fileId: file.id,
+            filePath: file.path,
+            type: generator.type
+        )
+
+        // Simulate completion after a delay (in reality, listen to AppBus events)
+        Task {
+            // Wait a bit then remove from generating set
+            try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2 seconds
+
+            await MainActor.run {
+                generatingDerivatives.remove(generator.type)
+            }
+        }
     }
 }
 

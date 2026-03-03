@@ -247,6 +247,35 @@ class PlaygroundDatabase {
             print("✅ Created logs table")
         }
 
+        // Migration v7: Folders table and file hierarchy
+        migrator.registerMigration("v7_folders_hierarchy") { db in
+            print("📁 Creating folders table and updating files schema...")
+
+            // Create folders table
+            try db.create(table: "folders") { t in
+                t.column("id", .text).primaryKey()
+                t.column("name", .text).notNull()
+                t.column("path", .text).notNull().unique()
+                t.column("parent_path", .text).notNull().indexed()
+                t.column("created_at", .datetime).notNull()
+                t.column("deleted_at", .datetime)
+            }
+
+            // Add folder-related columns to files table
+            try db.alter(table: "files") { t in
+                t.add(column: "relative_path", .text)
+                t.add(column: "folder_path", .text)
+                t.add(column: "is_favorite", .boolean).defaults(to: false)
+                t.add(column: "content_hash", .text)
+            }
+
+            // Create index on folder_path for faster queries
+            try db.create(index: "idx_files_folder_path", on: "files", columns: ["folder_path"])
+            try db.create(index: "idx_files_is_favorite", on: "files", columns: ["is_favorite"])
+
+            print("✅ Created folders table and updated files schema")
+        }
+
         try migrator.migrate(queue)
     }
 

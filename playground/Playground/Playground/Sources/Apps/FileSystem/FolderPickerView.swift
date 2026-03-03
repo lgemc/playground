@@ -1,115 +1,46 @@
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
-/// Folder picker view - allows browsing and selecting iOS file system folders
+/// Folder picker view - allows browsing and selecting folders using UIDocumentPickerViewController
 struct FolderPickerView: View {
     @Environment(\.dismiss) private var dismiss
     let onFolderSelected: (URL) -> Void
 
-    @State private var currentPath: URL
-    @State private var folders: [FolderInfo] = []
-    @State private var isLoading = false
-    @State private var showError = false
-    @State private var errorMessage = ""
-
-    // Initialize with user's home directory or documents
-    init(onFolderSelected: @escaping (URL) -> Void) {
-        self.onFolderSelected = onFolderSelected
-
-        // Start with Documents directory
-        #if os(iOS)
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        #else
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-        #endif
-
-        _currentPath = State(initialValue: documentsPath)
-    }
+    @State private var showingDocumentPicker = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Breadcrumb navigation
-            FolderBreadcrumb(currentPath: currentPath, onNavigate: navigateToPath)
+        VStack(spacing: 20) {
+            Spacer()
 
-            Divider()
+            Image(systemName: "folder.badge.plus")
+                .font(.system(size: 80))
+                .foregroundColor(.blue)
 
-            // Folder list
-            if isLoading {
-                Spacer()
-                ProgressView("Loading folders...")
-                Spacer()
-            } else if folders.isEmpty {
-                Spacer()
-                VStack(spacing: 16) {
-                    Image(systemName: "folder.badge.questionmark")
-                        .font(.system(size: 64))
-                        .foregroundColor(.gray)
+            Text("Select a Folder")
+                .font(.title2)
+                .fontWeight(.semibold)
 
-                    Text("No accessible folders")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
+            Text("Choose a folder to add to your file system. You'll have access to all files in the selected folder.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
 
-                    Text("This folder may be empty or you may not have permission to access its contents")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                }
-                Spacer()
-            } else {
-                List {
-                    // Parent directory option (if not at root)
-                    if canGoUp {
-                        Button(action: goUp) {
-                            HStack {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .foregroundColor(.blue)
-                                    .font(.title2)
-
-                                Text("Parent Folder")
-                                    .foregroundColor(.primary)
-
-                                Spacer()
-
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-
-                    // Folder list
-                    ForEach(folders) { folder in
-                        Button(action: { navigateToFolder(folder) }) {
-                            HStack {
-                                Image(systemName: folder.isSpecialFolder ? "folder.fill" : "folder")
-                                    .foregroundColor(folder.isSpecialFolder ? .orange : .blue)
-                                    .font(.title2)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(folder.name)
-                                        .foregroundColor(.primary)
-
-                                    if let itemCount = folder.itemCount {
-                                        Text("\(itemCount) item\(itemCount == 1 ? "" : "s")")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-
-                                Spacer()
-
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
-                .listStyle(.plain)
+            Button(action: {
+                showingDocumentPicker = true
+            }) {
+                Label("Browse Folders", systemImage: "folder")
+                    .font(.headline)
+                    .padding()
+                    .frame(maxWidth: 280)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
             }
+            .padding(.top, 20)
+
+            Spacer()
         }
         .navigationTitle("Select Folder")
         .navigationBarTitleDisplayMode(.inline)
@@ -119,188 +50,79 @@ struct FolderPickerView: View {
                     dismiss()
                 }
             }
-
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Select") {
-                    onFolderSelected(currentPath)
-                    dismiss()
-                }
-                .fontWeight(.semibold)
-            }
         }
-        .alert("Error", isPresented: $showError) {
-            Button("OK") {}
-        } message: {
-            Text(errorMessage)
-        }
-        .onAppear {
-            loadFolders()
+        .sheet(isPresented: $showingDocumentPicker) {
+            DocumentPicker(onFolderSelected: { url in
+                onFolderSelected(url)
+                dismiss()
+            })
         }
     }
+}
 
-    // MARK: - Navigation
+// MARK: - Document Picker
 
-    private var canGoUp: Bool {
-        // Can go up if not at root
-        return currentPath.path != "/"
+struct DocumentPicker: UIViewControllerRepresentable {
+    let onFolderSelected: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
+        picker.allowsMultipleSelection = false
+        picker.shouldShowFileExtensions = true
+        picker.delegate = context.coordinator
+        return picker
     }
 
-    private func goUp() {
-        let parent = currentPath.deletingLastPathComponent()
-        navigateToPath(parent)
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {
+        // No updates needed
     }
 
-    private func navigateToFolder(_ folder: FolderInfo) {
-        navigateToPath(folder.url)
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFolderSelected: onFolderSelected)
     }
 
-    private func navigateToPath(_ path: URL) {
-        currentPath = path
-        loadFolders()
-    }
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onFolderSelected: (URL) -> Void
 
-    // MARK: - Data Loading
+        init(onFolderSelected: @escaping (URL) -> Void) {
+            self.onFolderSelected = onFolderSelected
+        }
 
-    private func loadFolders() {
-        isLoading = true
-        folders = []
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
 
-        Task {
+            // Start accessing security-scoped resource
+            let startedAccess = url.startAccessingSecurityScopedResource()
+
+            // Create security-scoped bookmark for persistent access
             do {
-                let contents = try FileManager.default.contentsOfDirectory(
-                    at: currentPath,
-                    includingPropertiesForKeys: [.isDirectoryKey, .nameKey],
-                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                let bookmarkData = try url.bookmarkData(
+                    options: .minimalBookmark,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
                 )
 
-                // Filter to directories only
-                var folderInfos: [FolderInfo] = []
+                // Store bookmark in UserDefaults for persistent access
+                let bookmarkKey = "folder_bookmark_\(url.path.hash)"
+                UserDefaults.standard.set(bookmarkData, forKey: bookmarkKey)
 
-                for url in contents {
-                    let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey])
-                    if resourceValues.isDirectory == true {
-                        // Try to count items in folder
-                        let itemCount = try? FileManager.default.contentsOfDirectory(atPath: url.path).count
-
-                        folderInfos.append(FolderInfo(
-                            url: url,
-                            name: url.lastPathComponent,
-                            itemCount: itemCount,
-                            isSpecialFolder: isSpecialFolder(url)
-                        ))
-                    }
-                }
-
-                // Sort folders alphabetically
-                folderInfos.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-
-                await MainActor.run {
-                    folders = folderInfos
-                    isLoading = false
-                }
+                print("✅ Created bookmark for folder: \(url.path)")
             } catch {
-                await MainActor.run {
-                    errorMessage = "Failed to load folders: \(error.localizedDescription)"
-                    showError = true
-                    isLoading = false
-                }
+                print("⚠️ Failed to create bookmark: \(error.localizedDescription)")
             }
-        }
-    }
 
-    private func isSpecialFolder(_ url: URL) -> Bool {
-        // Check if it's a special system folder
-        let specialFolders = [
-            FileManager.SearchPathDirectory.documentDirectory,
-            .downloadsDirectory,
-            .desktopDirectory,
-            .picturesDirectory,
-            .moviesDirectory,
-            .musicDirectory
-        ]
+            // Call the completion handler
+            onFolderSelected(url)
 
-        for directory in specialFolders {
-            if let specialPath = FileManager.default.urls(for: directory, in: .userDomainMask).first,
-               url.path == specialPath.path {
-                return true
+            // Stop accessing when done
+            if startedAccess {
+                url.stopAccessingSecurityScopedResource()
             }
         }
 
-        return false
-    }
-}
-
-// MARK: - Supporting Types
-
-struct FolderInfo: Identifiable {
-    let id = UUID()
-    let url: URL
-    let name: String
-    let itemCount: Int?
-    let isSpecialFolder: Bool
-}
-
-// MARK: - Breadcrumb Component
-
-private struct FolderBreadcrumb: View {
-    let currentPath: URL
-    let onNavigate: (URL) -> Void
-
-    private var pathComponents: [PathComponent] {
-        var components: [PathComponent] = []
-        var currentURL = currentPath
-
-        // Build path from current to root
-        while currentURL.path != "/" {
-            let name = currentURL.lastPathComponent
-            if !name.isEmpty {
-                components.insert(PathComponent(name: name, url: currentURL), at: 0)
-            }
-            currentURL = currentURL.deletingLastPathComponent()
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            // User cancelled, do nothing
         }
-
-        // Add root
-        #if os(iOS)
-        // On iOS, use Documents directory as root
-        if let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            components.insert(PathComponent(name: "Documents", url: documentsURL), at: 0)
-        }
-        #else
-        components.insert(PathComponent(name: "~", url: FileManager.default.homeDirectoryForCurrentUser), at: 0)
-        #endif
-
-        return components
-    }
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(Array(pathComponents.enumerated()), id: \.element.id) { index, component in
-                    Button(action: { onNavigate(component.url) }) {
-                        Text(component.name)
-                            .font(.subheadline)
-                            .foregroundColor(index == pathComponents.count - 1 ? .primary : .blue)
-                            .fontWeight(index == pathComponents.count - 1 ? .semibold : .regular)
-                            .lineLimit(1)
-                    }
-
-                    if index < pathComponents.count - 1 {
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 12)
-        }
-        .background(Color(.systemGroupedBackground))
-    }
-
-    private struct PathComponent: Identifiable {
-        let id = UUID()
-        let name: String
-        let url: URL
     }
 }
 

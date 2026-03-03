@@ -12,7 +12,7 @@ struct ChatView: View {
     @State private var scrollTarget: String?
     @State private var useMLX = true // Toggle: true = local MLX, false = OpenAI
     @State private var isLoadingChat = false
-    @State private var selectedModel: MLXModelConfig.ChatModel = .llama3_3b_4bit
+    @State private var selectedModel: MLXModelConfig.ChatModel = .qwen3_1_7b_6bit
 
     private let autocompletion = AutocompletionService.shared
     private let mlx = MLXService.shared
@@ -206,70 +206,161 @@ struct ChatView: View {
 
         do {
             // Convert messages to API format
-            let apiMessages = messages.map {
+            var conversationHistory = messages.map {
                 AutocompletionService.ChatMessage(
                     role: $0.role.rawValue,
                     content: $0.content
                 )
             }
 
-            // Stream response with throttled UI updates
-            var buffer = ""
-            var chunkCount = 0
-
-            // Use MLX or OpenAI based on toggle
-            let stream: AsyncThrowingStream<String, Error>
+            // Get available tools (only when using API, not MLX)
+            let tools: [[String: Any]]?
             if useMLX {
-                stream = mlx.chat.completeStream(messages: apiMessages, model: selectedModel)
+                tools = nil  // MLX doesn't support tools
             } else {
-                stream = autocompletion.completeStream(messages: apiMessages)
+                tools = await ToolService.shared.toOpenAIFormat()
             }
 
-            for try await chunk in stream {
-                buffer += chunk
-                chunkCount += 1
+            // Tool calling loop - continue until LLM responds without tool calls
+            while true {
+                var buffer = ""
+                var chunkCount = 0
+                var toolCalls: [(id: String, name: String, args: [String: Any])] = []
+                var isDone = false
 
-                // Only update UI every 5 chunks or when buffer is large
-                if chunkCount % 5 == 0 || buffer.count > 50 {
-                    streamingContent += buffer
-                    buffer = ""
+                // Stream response with tools support
+                if let tools = tools, !tools.isEmpty {
+                    // Use tool-enabled streaming
+                    let stream = autocompletion.completeWithTools(
+                        messages: conversationHistory,
+                        tools: tools
+                    )
 
-                    // Scroll without animation to reduce lag
-                    if chunkCount % 20 == 0 {
-                        scrollTarget = "streaming"
+                    for try await event in stream {
+                        switch event {
+                        case .contentChunk(let chunk):
+                            buffer += chunk
+                            chunkCount += 1
+
+                            // Only update UI every 5 chunks or when buffer is large
+                            if chunkCount % 5 == 0 || buffer.count > 50 {
+                                streamingContent += buffer
+                                buffer = ""
+
+                                // Scroll without animation to reduce lag
+                                if chunkCount % 20 == 0 {
+                                    scrollTarget = "streaming"
+                                }
+                            }
+
+                        case .toolCall(let id, let name, let args):
+                            toolCalls.append((id, name, args))
+
+                        case .done:
+                            isDone = true
+                        }
                     }
-                }
-            }
-
-            // Flush remaining buffer
-            if !buffer.isEmpty {
-                streamingContent += buffer
-            }
-
-            // Save assistant message
-            if !streamingContent.isEmpty {
-                let finalContent = streamingContent
-                let result = ChatStorage.shared.createMessage(
-                    chatId: chatId,
-                    role: .assistant,
-                    content: finalContent
-                )
-
-                if result.isErr {
-                    print("❌ Failed to save assistant message: \(result.error!)")
                 } else {
-                    messages.append(result.value!)
-                    scrollTarget = result.value!.id
+                    // Use regular streaming (no tools)
+                    let stream: AsyncThrowingStream<String, Error>
+                    if useMLX {
+                        stream = mlx.chat.completeStream(messages: conversationHistory, model: selectedModel)
+                    } else {
+                        stream = autocompletion.completeStream(messages: conversationHistory)
+                    }
 
-                    // Auto-generate title if this is the first exchange
-                    if messages.count == 2 {
-                        await generateTitle()
+                    for try await chunk in stream {
+                        buffer += chunk
+                        chunkCount += 1
+
+                        // Only update UI every 5 chunks or when buffer is large
+                        if chunkCount % 5 == 0 || buffer.count > 50 {
+                            streamingContent += buffer
+                            buffer = ""
+
+                            // Scroll without animation to reduce lag
+                            if chunkCount % 20 == 0 {
+                                scrollTarget = "streaming"
+                            }
+                        }
+                    }
+                    isDone = true
+                }
+
+                // Flush remaining buffer
+                if !buffer.isEmpty {
+                    streamingContent += buffer
+                }
+
+                // If no tool calls, we're done - save the message
+                if toolCalls.isEmpty {
+                    if !streamingContent.isEmpty {
+                        let finalContent = streamingContent
+                        let result = ChatStorage.shared.createMessage(
+                            chatId: chatId,
+                            role: .assistant,
+                            content: finalContent
+                        )
+
+                        if result.isErr {
+                            print("❌ Failed to save assistant message: \(result.error!)")
+                        } else {
+                            messages.append(result.value!)
+                            scrollTarget = result.value!.id
+
+                            // Auto-generate title if this is the first exchange
+                            if messages.count == 2 {
+                                await generateTitle()
+                            }
+                        }
+                    }
+                    break  // Exit the tool calling loop
+                }
+
+                // Execute tool calls
+                for toolCall in toolCalls {
+                    print("🛠️ Executing tool: \(toolCall.name) with args: \(toolCall.args)")
+
+                    // Show tool execution status in UI
+                    streamingContent += "\n\n_Executing \(toolCall.name)..._"
+
+                    let result = await ToolService.shared.execute(
+                        name: toolCall.name,
+                        arguments: toolCall.args
+                    )
+
+                    print("🛠️ Tool result: \(result.toJSON())")
+
+                    // Add assistant message with tool call to history
+                    conversationHistory.append(AutocompletionService.ChatMessage(
+                        role: "assistant",
+                        content: streamingContent
+                    ))
+
+                    // Add tool result to history
+                    let resultJSON = result.toJSON()
+                    let resultString = (try? String(data: JSONSerialization.data(withJSONObject: resultJSON), encoding: .utf8)) ?? "{}"
+                    conversationHistory.append(AutocompletionService.ChatMessage(
+                        role: "tool",
+                        content: resultString
+                    ))
+
+                    // Update UI to show tool executed
+                    if result.isSuccess {
+                        streamingContent += " ✅"
+                    } else {
+                        streamingContent += " ❌"
                     }
                 }
+
+                // Clear buffer for next iteration
+                buffer = ""
+                streamingContent += "\n\n"
             }
 
         } catch {
             print("❌ Generation failed: \(error)")
+            streamingContent += "\n\n_Error: \(error.localizedDescription)_"
         }
 
         streamingContent = ""
@@ -320,8 +411,10 @@ struct ChatView: View {
         switch model {
         case .lfm25_1b_4bit:
             return "1.2B"
-        case .llama3_3b_4bit:
-            return "3B"
+        case .qwen3_1_7b_6bit:
+            return "1.7B"
+        case .qwen3_4b_6bit:
+            return "4B"
         case .mistral_7b_4bit:
             return "7B"
         }
@@ -331,8 +424,10 @@ struct ChatView: View {
         switch model {
         case .lfm25_1b_4bit:
             return "LFM 1.2B (Fast, ~800MB)"
-        case .llama3_3b_4bit:
-            return "Llama 3.2 3B (~2GB)"
+        case .qwen3_1_7b_6bit:
+            return "Qwen3 1.7B (Balanced, ~1.4GB)"
+        case .qwen3_4b_6bit:
+            return "Qwen3 4B (Quality, ~2.8GB)"
         case .mistral_7b_4bit:
             return "Mistral 7B (Best, ~4.5GB)"
         }

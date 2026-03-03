@@ -18,7 +18,7 @@ class FileSystemApp: SubApp {
     init() {}
 
     func buildView() -> AnyView {
-        AnyView(FileListView())
+        AnyView(FileBrowserView())
     }
 
     // MARK: - Lifecycle
@@ -76,10 +76,11 @@ class FileSystemApp: SubApp {
             // Get file info
             let fileInfo = try FileExtractionService.shared.getFileInfo(at: fileURL.path)
 
-            // Create file in storage
+            // Create file in storage (shared files go to root folder)
             let fileResult = FileStorage.shared.createFile(
                 name: fileName,
                 path: fileURL.path,
+                folderPath: "",
                 mimeType: content.type,
                 sizeBytes: fileInfo.size
             )

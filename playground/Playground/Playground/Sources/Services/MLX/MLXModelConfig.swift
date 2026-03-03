@@ -10,9 +10,13 @@ enum MLXModelConfig {
         /// Performance: 70 tokens/sec on iPhone, 124 tokens/sec on iPad
         case lfm25_1b_4bit = "mlx-community/LFM2.5-1.2B-4bit"
 
-        /// Balanced: 3B parameter model, 4-bit quantized
-        /// Performance: 10-20 tokens/sec
-        case llama3_3b_4bit = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+        /// Balanced: Qwen3 1.7B, 6-bit quantized (32K context)
+        /// Performance: 25-35 tokens/sec
+        case qwen3_1_7b_6bit = "mlx-community/Qwen3-1.7B-6bit"
+
+        /// Higher quality: Qwen3 4B, 6-bit quantized (32K context)
+        /// Performance: 15-20 tokens/sec
+        case qwen3_4b_6bit = "mlx-community/Qwen3-4B-6bit"
 
         /// High quality: 7B parameter model, 4-bit quantized
         /// Performance: 8-15 tokens/sec (slower but higher quality)
@@ -21,7 +25,8 @@ enum MLXModelConfig {
         var estimatedMemoryMB: Int {
             switch self {
             case .lfm25_1b_4bit: return 800  // ~800MB
-            case .llama3_3b_4bit: return 2000  // ~2GB
+            case .qwen3_1_7b_6bit: return 1400  // ~1.4GB (6-bit quantized)
+            case .qwen3_4b_6bit: return 2800  // ~2.8GB (6-bit quantized)
             case .mistral_7b_4bit: return 4500  // ~4.5GB
             }
         }
@@ -29,7 +34,8 @@ enum MLXModelConfig {
         var tokensPerSecond: Int {
             switch self {
             case .lfm25_1b_4bit: return 70
-            case .llama3_3b_4bit: return 15
+            case .qwen3_1_7b_6bit: return 30
+            case .qwen3_4b_6bit: return 18
             case .mistral_7b_4bit: return 10
             }
         }
@@ -89,7 +95,7 @@ enum MLXModelConfig {
         }
     }
 
-    // MARK: - Text-to-Image Models
+    // MARK: - Text-to-Image Models (Stable Diffusion - DEPRECATED)
 
     enum ImageModel: String, CaseIterable {
         /// Stable Diffusion 1.5 optimized for MLX
@@ -118,14 +124,52 @@ enum MLXModelConfig {
         }
     }
 
+    // MARK: - Flux Models (NEW)
+
+    enum FluxModel: String, CaseIterable {
+        /// Flux Schnell: Fast generation (4 steps), no guidance
+        case fluxSchnell = "flux-schnell"
+
+        /// Flux Dev: High quality (20+ steps), with guidance
+        case fluxDev = "flux-dev"
+
+        /// Flux Kontext: Context-aware generation
+        case fluxKontext = "flux-kontext"
+
+        var estimatedMemoryMB: Int {
+            switch self {
+            case .fluxSchnell: return 12000  // ~12GB (can use quantization)
+            case .fluxDev: return 12000      // ~12GB (can use quantization)
+            case .fluxKontext: return 12000  // ~12GB (can use quantization)
+            }
+        }
+
+        var defaultSteps: Int {
+            switch self {
+            case .fluxSchnell: return 4   // Optimized for speed
+            case .fluxDev: return 20      // Quality mode
+            case .fluxKontext: return 20  // Quality mode
+            }
+        }
+
+        // FIXME: FluxConfiguration not available due to dependency conflict
+        // var configuration: FluxConfiguration {
+        //     switch self {
+        //     case .fluxSchnell: return .flux1Schnell
+        //     case .fluxDev: return .flux1Dev
+        //     case .fluxKontext: return .flux1Kontext
+        //     }
+        // }
+    }
+
     // MARK: - Model Selection
 
     /// Automatically select best chat model based on available memory
     static func recommendedChatModel(availableMemoryGB: Double) -> ChatModel {
         if availableMemoryGB >= 8 {
-            return .llama3_3b_4bit  // Balanced - avoid OOM
+            return .qwen3_1_7b_6bit  // Balanced - avoid OOM
         } else if availableMemoryGB >= 4 {
-            return .llama3_3b_4bit  // Balanced
+            return .qwen3_1_7b_6bit  // Balanced
         } else {
             return .lfm25_1b_4bit  // Fast & efficient
         }
@@ -149,7 +193,7 @@ enum MLXModelConfig {
         return .kokoro  // Fast, multilingual, excellent quality
     }
 
-    /// Automatically select best image model based on available memory
+    /// Automatically select best image model based on available memory (DEPRECATED - use recommendedFluxModel)
     static func recommendedImageModel(availableMemoryGB: Double) -> ImageModel {
         if availableMemoryGB >= 6 {
             return .sdxlTurbo  // Fast generation
@@ -157,6 +201,18 @@ enum MLXModelConfig {
             return .sd21
         } else {
             return .sd15
+        }
+    }
+
+    /// Automatically select best Flux model based on available memory
+    static func recommendedFluxModel(availableMemoryGB: Double) -> FluxModel {
+        // Flux-schnell is fastest and works well with quantization
+        // Even on devices with less memory, quantization makes it viable
+        if availableMemoryGB >= 8 {
+            return .fluxSchnell  // Fast, high quality
+        } else {
+            // Use quantization for lower memory devices
+            return .fluxSchnell  // Will use quantization automatically
         }
     }
 }

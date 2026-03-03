@@ -15,6 +15,12 @@ struct PlaygroundApp: App {
         print("🚌 Initializing AppBus...")
         _ = AppBus.shared
 
+        print("📋 Initializing QueueService...")
+        QueueService.shared.initialize()
+
+        print("📝 Initializing DerivativeService...")
+        DerivativeService.shared.initialize()
+
         // Register sub-apps
         print("📱 Registering sub-apps...")
         AppRegistry.shared.register(ChatApp())
@@ -22,6 +28,14 @@ struct PlaygroundApp: App {
         AppRegistry.shared.register(FileSystemApp())
         AppRegistry.shared.register(QueuesApp())
         AppRegistry.shared.register(LogsApp())
+        AppRegistry.shared.register(ImageGenApp())
+
+        // Register tools for LLM
+        print("🛠️ Registering tools...")
+        // TODO: Re-implement GenerateImageTool with proper Swift 6 concurrency
+        // Task {
+        //     await ToolService.shared.register(GenerateImageTool.create())
+        // }
 
         print("✅ PlaygroundApp init completed")
     }

@@ -363,6 +363,15 @@ struct QueueConfigs {
             maxRetries: 3,
             lockTimeoutSeconds: 60
         ),
+        // Queue for derivative generation (video transcripts, thumbnails, etc.)
+        QueueConfig(
+            id: "derivative-generator",
+            name: "Derivative Generator",
+            eventPatterns: ["derivative.create"],
+            maxRetries: 3,
+            lockTimeoutSeconds: 600, // 10 minutes for video transcription
+            retryDelaysMs: [5000, 15000, 300000] // 5s, 15s, 5min
+        ),
         // Catch-all queue for unmatched events (disabled by default)
         QueueConfig(
             id: "default-queue",

@@ -230,25 +230,25 @@ class MLXChatService: ObservableObject {
     // MARK: - Prompt Formatting
 
     /// Format chat messages into a single prompt string
-    /// Uses Llama 3 chat template format
+    /// Uses Qwen3 chat template format (compatible with multiple models)
     private func formatMessagesAsPrompt(_ messages: [ChatMessage]) -> String {
-        var prompt = "<|begin_of_text|>"
+        var prompt = ""
 
         for message in messages {
             switch message.role {
             case "system":
-                prompt += "<|start_header_id|>system<|end_header_id|>\n\n\(message.content)<|eot_id|>"
+                prompt += "<|im_start|>system\n\(message.content)<|im_end|>\n"
             case "user":
-                prompt += "<|start_header_id|>user<|end_header_id|>\n\n\(message.content)<|eot_id|>"
+                prompt += "<|im_start|>user\n\(message.content)<|im_end|>\n"
             case "assistant":
-                prompt += "<|start_header_id|>assistant<|end_header_id|>\n\n\(message.content)<|eot_id|>"
+                prompt += "<|im_start|>assistant\n\(message.content)<|im_end|>\n"
             default:
                 prompt += "\(message.content)\n"
             }
         }
 
         // Add assistant prompt to trigger response
-        prompt += "<|start_header_id|>assistant<|end_header_id|>\n\n"
+        prompt += "<|im_start|>assistant\n"
 
         return prompt
     }

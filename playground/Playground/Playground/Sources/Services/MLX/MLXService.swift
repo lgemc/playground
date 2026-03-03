@@ -36,9 +36,10 @@ class MLXService {
         config.defineConfig(key: "mlx.max_tokens", value: 1024)
 
         // Model selection - you have 11.8GB available, can use larger models!
-        // llama3_3b_4bit = ~2GB (current, fast)
-        // mistral_7b_4bit = ~4.5GB (better quality, slower)
-        config.defineConfig(key: "mlx.chat_model", value: MLXModelConfig.ChatModel.llama3_3b_4bit.rawValue)
+        // qwen3_1_7b_6bit = ~1.4GB (current, balanced, fast)
+        // qwen3_4b_6bit = ~2.8GB (better quality)
+        // mistral_7b_4bit = ~4.5GB (best quality, slower)
+        config.defineConfig(key: "mlx.chat_model", value: MLXModelConfig.ChatModel.qwen3_1_7b_6bit.rawValue)
         config.defineConfig(key: "mlx.whisper_model", value: MLXModelConfig.WhisperModel.small.rawValue)
         config.defineConfig(key: "mlx.tts_model", value: MLXModelConfig.TTSModel.kokoro.rawValue)
         config.defineConfig(key: "mlx.image_model", value: MLXModelConfig.ImageModel.sdxlTurbo.rawValue)

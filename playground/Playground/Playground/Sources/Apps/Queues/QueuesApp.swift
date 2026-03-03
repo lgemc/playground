@@ -19,7 +19,7 @@ class QueuesApp: SubApp {
     }
 
     func onInit() async {
-        // Ensure QueueService is initialized
-        QueueService.shared.initialize()
+        // Services are initialized globally in PlaygroundApp.swift
+        // No additional initialization needed
     }
 }

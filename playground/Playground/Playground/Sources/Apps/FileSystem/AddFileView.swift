@@ -1,37 +1,69 @@
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 /// Add file view - form for adding new files to the system
 struct AddFileView: View {
     @Environment(\.dismiss) private var dismiss
+    let folderPath: String
     let onFileAdded: () -> Void
 
-    @State private var filePath: String = ""
+    @State private var selectedFileURL: URL?
     @State private var customName: String = ""
     @State private var autoExtractText: Bool = true
 
     @State private var isAdding = false
     @State private var showError = false
     @State private var errorMessage = ""
-    @State private var showFolderPicker = false
+    @State private var showFilePicker = false
 
     var body: some View {
         Form {
-            Section("File Path") {
-                HStack {
-                    TextField("Enter file path", text: $filePath)
-                        .autocapitalization(.none)
-                        .autocorrectionDisabled()
-                        .font(.system(.body, design: .monospaced))
+            Section("File Selection") {
+                if let url = selectedFileURL {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: fileIcon(for: url))
+                                .font(.title)
+                                .foregroundColor(.blue)
 
-                    Button(action: { showFolderPicker = true }) {
-                        Image(systemName: "folder.badge.plus")
-                            .foregroundColor(.blue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(url.lastPathComponent)
+                                    .font(.headline)
+
+                                Text(url.path)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+
+                        Button("Change File") {
+                            showFilePicker = true
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundColor(.blue)
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    Button(action: { showFilePicker = true }) {
+                        HStack {
+                            Image(systemName: "doc.badge.plus")
+                                .font(.title2)
+
+                            Text("Select File")
+                                .font(.headline)
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .foregroundColor(.blue)
+                        .padding(.vertical, 8)
                     }
                 }
-
-                Text("Enter the full path or browse for a folder")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
 
             Section("Options") {
@@ -46,38 +78,30 @@ struct AddFileView: View {
                     .foregroundColor(.secondary)
             }
 
-            // File info preview (if path looks valid)
-            if !filePath.isEmpty && FileManager.default.fileExists(atPath: filePath) {
+            // File info preview
+            if let url = selectedFileURL,
+               let fileInfo = try? FileExtractionService.shared.getFileInfo(at: url.path) {
                 Section("File Preview") {
-                    if let fileInfo = try? FileExtractionService.shared.getFileInfo(at: filePath) {
-                        HStack {
-                            Text("Name")
-                            Spacer()
-                            Text(fileInfo.name)
-                                .foregroundColor(.secondary)
-                        }
+                    HStack {
+                        Text("Size")
+                        Spacer()
+                        Text(fileInfo.formattedSize)
+                            .foregroundColor(.secondary)
+                    }
 
-                        HStack {
-                            Text("Size")
-                            Spacer()
-                            Text(fileInfo.formattedSize)
-                                .foregroundColor(.secondary)
-                        }
+                    HStack {
+                        Text("Extension")
+                        Spacer()
+                        Text(fileInfo.fileExtension.isEmpty ? "None" : fileInfo.fileExtension)
+                            .foregroundColor(.secondary)
+                    }
 
+                    if FileExtractionService.shared.isSupported(fileExtension: fileInfo.fileExtension) {
                         HStack {
-                            Text("Extension")
-                            Spacer()
-                            Text(fileInfo.fileExtension.isEmpty ? "None" : fileInfo.fileExtension)
-                                .foregroundColor(.secondary)
-                        }
-
-                        if FileExtractionService.shared.isSupported(fileExtension: fileInfo.fileExtension) {
-                            HStack {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                Text("Text extraction supported")
-                                    .font(.caption)
-                            }
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Text extraction supported")
+                                .font(.caption)
                         }
                     }
                 }
@@ -96,7 +120,7 @@ struct AddFileView: View {
                 Button("Add") {
                     addFile()
                 }
-                .disabled(filePath.isEmpty || isAdding)
+                .disabled(selectedFileURL == nil || isAdding)
             }
         }
         .alert("Error", isPresented: $showError) {
@@ -104,35 +128,87 @@ struct AddFileView: View {
         } message: {
             Text(errorMessage)
         }
-        .sheet(isPresented: $showFolderPicker) {
-            NavigationStack {
-                FolderPickerView { selectedURL in
-                    filePath = selectedURL.path
-                }
-            }
+        .sheet(isPresented: $showFilePicker) {
+            FileDocumentPicker(onFileSelected: { url in
+                selectedFileURL = url
+            })
+        }
+    }
+
+    private func fileIcon(for url: URL) -> String {
+        let ext = url.pathExtension.lowercased()
+        switch ext {
+        case "pdf": return "doc.text.fill"
+        case "mp4", "mov", "avi", "mkv": return "video.fill"
+        case "mp3", "m4a", "wav": return "music.note"
+        case "jpg", "jpeg", "png", "gif": return "photo.fill"
+        case "txt", "md": return "doc.text"
+        case "zip", "rar": return "doc.zipper"
+        default: return "doc.fill"
         }
     }
 
     private func addFile() {
-        guard !filePath.isEmpty else { return }
+        guard let fileURL = selectedFileURL else { return }
 
         isAdding = true
 
         Task {
             do {
-                // Get file info
-                let fileInfo = try FileExtractionService.shared.getFileInfo(at: filePath)
+                // Start accessing security-scoped resource
+                let startedAccess = fileURL.startAccessingSecurityScopedResource()
+                defer {
+                    if startedAccess {
+                        fileURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+
+                // Get file info from original location
+                let fileInfo = try FileExtractionService.shared.getFileInfo(at: fileURL.path)
 
                 // Determine file name
                 let fileName = customName.isEmpty ? fileInfo.name : customName
 
+                // Create app's files directory structure
+                let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let filesDirectory = documentsURL.appendingPathComponent("Files")
+
+                // Create the Files directory if it doesn't exist
+                try FileManager.default.createDirectory(at: filesDirectory, withIntermediateDirectories: true)
+
+                // Create folder path within Files directory if needed
+                let destinationFolder: URL
+                if folderPath.isEmpty {
+                    destinationFolder = filesDirectory
+                } else {
+                    destinationFolder = filesDirectory.appendingPathComponent(folderPath)
+                    try FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+                }
+
+                // Create destination URL with unique name if file already exists
+                var destinationURL = destinationFolder.appendingPathComponent(fileName)
+                var counter = 1
+                while FileManager.default.fileExists(atPath: destinationURL.path) {
+                    let nameWithoutExt = (fileName as NSString).deletingPathExtension
+                    let ext = (fileName as NSString).pathExtension
+                    let uniqueName = ext.isEmpty ? "\(nameWithoutExt)_\(counter)" : "\(nameWithoutExt)_\(counter).\(ext)"
+                    destinationURL = destinationFolder.appendingPathComponent(uniqueName)
+                    counter += 1
+                }
+
+                // Copy file to app's storage
+                try FileManager.default.copyItem(at: fileURL, to: destinationURL)
+
+                print("✅ Copied file to: \(destinationURL.path)")
+
                 // Detect MIME type
                 let mimeType = detectMimeType(fileExtension: fileInfo.fileExtension)
 
-                // Create file in storage
+                // Create file in storage with the new internal path
                 let fileResult = FileStorage.shared.createFile(
-                    name: fileName,
-                    path: filePath,
+                    name: destinationURL.lastPathComponent,
+                    path: destinationURL.path,
+                    folderPath: folderPath,
                     mimeType: mimeType,
                     sizeBytes: fileInfo.size
                 )
@@ -194,8 +270,75 @@ struct AddFileView: View {
     }
 }
 
+// MARK: - File Document Picker
+
+struct FileDocumentPicker: UIViewControllerRepresentable {
+    let onFileSelected: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        // Allow all file types
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item])
+        picker.allowsMultipleSelection = false
+        picker.shouldShowFileExtensions = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {
+        // No updates needed
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFileSelected: onFileSelected)
+    }
+
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onFileSelected: (URL) -> Void
+
+        init(onFileSelected: @escaping (URL) -> Void) {
+            self.onFileSelected = onFileSelected
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+
+            // Start accessing security-scoped resource
+            let startedAccess = url.startAccessingSecurityScopedResource()
+
+            // Create security-scoped bookmark for persistent access
+            do {
+                let bookmarkData = try url.bookmarkData(
+                    options: .minimalBookmark,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+
+                // Store bookmark in UserDefaults for persistent access
+                let bookmarkKey = "file_bookmark_\(url.path.hash)"
+                UserDefaults.standard.set(bookmarkData, forKey: bookmarkKey)
+
+                print("✅ Created bookmark for file: \(url.lastPathComponent)")
+            } catch {
+                print("⚠️ Failed to create bookmark: \(error.localizedDescription)")
+            }
+
+            // Call the completion handler
+            onFileSelected(url)
+
+            // Stop accessing when done
+            if startedAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            // User cancelled, do nothing
+        }
+    }
+}
+
 #Preview {
     NavigationStack {
-        AddFileView(onFileAdded: {})
+        AddFileView(folderPath: "", onFileAdded: {})
     }
 }
