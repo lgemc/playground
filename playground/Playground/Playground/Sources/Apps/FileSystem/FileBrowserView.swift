@@ -12,6 +12,9 @@ struct FileBrowserView: View {
     @State private var showingRenameFolder = false
     @State private var folderToRename: Folder?
     @State private var isLoading = false
+    @State private var showingCleanupAlert = false
+    @State private var cleanupReport: CleanupReport?
+    @State private var showingCleanupConfirm = false
 
     init(currentPath: String = "") {
         self.currentPath = currentPath
@@ -53,6 +56,21 @@ struct FileBrowserView: View {
         .onAppear(perform: loadContents)
         .refreshable {
             loadContents()
+        }
+        .alert("Cleanup Storage", isPresented: $showingCleanupConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clean Up", role: .destructive) {
+                performCleanup()
+            }
+        } message: {
+            Text("This will remove orphaned files (files on disk but not in database) and old storage directories. This action cannot be undone.")
+        }
+        .alert("Cleanup Complete", isPresented: $showingCleanupAlert) {
+            Button("OK") {}
+        } message: {
+            if let report = cleanupReport {
+                Text(report.summary)
+            }
         }
     }
 
@@ -124,7 +142,22 @@ struct FileBrowserView: View {
         return components.last.map(String.init) ?? "Files"
     }
 
+    @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Menu {
+                Button(action: debugPrintFileSystem) {
+                    Label("Debug Info", systemImage: "info.circle")
+                }
+
+                Button(role: .destructive, action: { showingCleanupConfirm = true }) {
+                    Label("Cleanup Storage", systemImage: "trash.circle")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+        }
+
         ToolbarItem(placement: .navigationBarTrailing) {
             addMenu
         }
@@ -146,6 +179,66 @@ struct FileBrowserView: View {
         } label: {
             Image(systemName: "plus")
         }
+    }
+
+    private func debugPrintFileSystem() {
+        print("\n📁 ===== FILE SYSTEM DEBUG =====")
+        print("Current path: '\(currentPath)'")
+
+        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        print("Documents directory: \(documentsURL.path)")
+
+        // Check storage directory
+        let storageDirectory = documentsURL
+            .appendingPathComponent("data", isDirectory: true)
+            .appendingPathComponent("file_system", isDirectory: true)
+            .appendingPathComponent("storage", isDirectory: true)
+
+        print("\n📂 Storage directory: \(storageDirectory.path)")
+        print("   Exists: \(FileManager.default.fileExists(atPath: storageDirectory.path))")
+
+        if let contents = try? FileManager.default.contentsOfDirectory(atPath: storageDirectory.path) {
+            print("   Contents (\(contents.count) items):")
+            for item in contents {
+                let itemPath = storageDirectory.appendingPathComponent(item).path
+                var isDir: ObjCBool = false
+                FileManager.default.fileExists(atPath: itemPath, isDirectory: &isDir)
+                print("     - \(item) (\(isDir.boolValue ? "dir" : "file"))")
+            }
+        } else {
+            print("   Failed to read contents or directory doesn't exist")
+        }
+
+        // Check old Files directory (if exists)
+        let oldFilesDirectory = documentsURL.appendingPathComponent("Files")
+        print("\n📂 Old 'Files' directory: \(oldFilesDirectory.path)")
+        print("   Exists: \(FileManager.default.fileExists(atPath: oldFilesDirectory.path))")
+
+        if FileManager.default.fileExists(atPath: oldFilesDirectory.path) {
+            if let contents = try? FileManager.default.contentsOfDirectory(atPath: oldFilesDirectory.path) {
+                print("   ⚠️ WARNING: Old files found (\(contents.count) items):")
+                for item in contents {
+                    print("     - \(item)")
+                }
+            }
+        }
+
+        // Print database records
+        print("\n💾 Database records (current path: '\(currentPath)'):")
+        print("   Folders: \(folders.count)")
+        folders.forEach { folder in
+            print("     - \(folder.name) (path: \(folder.path))")
+        }
+        print("   Files: \(files.count)")
+        files.forEach { file in
+            print("     - \(file.name)")
+            print("       DB path: \(file.path)")
+            print("       Relative path: \(file.relativePath ?? "nil")")
+            print("       Absolute path: \(file.absolutePath)")
+            print("       Exists on disk: \(FileManager.default.fileExists(atPath: file.absolutePath))")
+        }
+
+        print("===== END DEBUG =====\n")
     }
 
     private func loadContents() {
@@ -198,6 +291,23 @@ struct FileBrowserView: View {
         } else {
             // Reload to get updated favorite status
             loadContents()
+        }
+    }
+
+    private func performCleanup() {
+        print("🧹 Starting storage cleanup...")
+        let result = FileStorage.shared.cleanupOrphanedFiles()
+
+        if let report = result.value {
+            cleanupReport = report
+            showingCleanupAlert = true
+
+            // Reload contents after cleanup
+            loadContents()
+        } else if let error = result.error {
+            print("❌ Cleanup failed: \(error)")
+            cleanupReport = CleanupReport(errors: ["Cleanup failed: \(error.localizedDescription)"])
+            showingCleanupAlert = true
         }
     }
 }

@@ -152,7 +152,7 @@ class VideoTranscriptService {
     private func extractAudio(from videoURL: URL) async throws -> URL {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("wav")
+            .appendingPathExtension("m4a")
 
         let asset = AVAsset(url: videoURL)
 
@@ -161,16 +161,17 @@ class VideoTranscriptService {
             throw VideoTranscriptError.noAudioTrack
         }
 
-        // Create export session
+        // Create export session with a compatible preset
+        // Use AppleM4A preset which is compatible with m4a output
         guard let exportSession = AVAssetExportSession(
             asset: asset,
-            presetName: AVAssetExportPresetPassthrough
+            presetName: AVAssetExportPresetAppleM4A
         ) else {
             throw VideoTranscriptError.exportFailed("Could not create export session")
         }
 
         exportSession.outputURL = outputURL
-        exportSession.outputFileType = .wav
+        exportSession.outputFileType = .m4a
 
         // Export audio
         await exportSession.export()

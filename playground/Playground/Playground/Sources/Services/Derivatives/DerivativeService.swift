@@ -7,6 +7,7 @@ class DerivativeService {
 
     private let logger: Logger
     private let queueService = QueueService.shared
+    private let storage = DerivativeStorage.shared
     private var generators: [String: DerivativeGenerator] = [:]
     private var queueSubscriptionId: String?
 
@@ -18,9 +19,13 @@ class DerivativeService {
 
     /// Initialize the service and register default generators
     func initialize() {
+        print("🚀 [DerivativeService] Initializing...")
+
         // Register default generators
         registerGenerator(TranscriptDerivativeGenerator())
         registerGenerator(SummaryDerivativeGenerator())
+
+        print("   Registered generators: \(Array(generators.keys))")
 
         // Subscribe to derivative.create queue
         queueSubscriptionId = queueService.subscribe(
@@ -31,6 +36,8 @@ class DerivativeService {
             await self?.processDerivativeMessage(message) ?? false
         }
 
+        print("   Subscribed to queue: derivative-generator")
+
         logger.info(
             "DerivativeService initialized with \(generators.count) generators",
             eventType: "derivative.service.init",
@@ -38,6 +45,8 @@ class DerivativeService {
                 "generators": Array(generators.keys)
             ]
         )
+
+        print("✅ [DerivativeService] Initialization complete!")
     }
 
     // MARK: - Generator Registration
@@ -71,6 +80,19 @@ class DerivativeService {
     /// Request derivative generation (emits event to queue)
     /// This matches the Dart implementation pattern
     func requestDerivative(fileId: String, filePath: String, type: String) {
+        print("📝 [DerivativeService] Requesting derivative generation")
+        print("   Type: \(type)")
+        print("   File: \(filePath)")
+        print("   File ID: \(fileId)")
+
+        // Create derivative record with pending status
+        do {
+            _ = try storage.createDerivative(fileId: fileId, type: type).get()
+        } catch {
+            print("❌ [DerivativeService] Failed to create derivative record: \(error)")
+            return
+        }
+
         logger.info(
             "Requesting derivative generation",
             eventType: "derivative.request",
@@ -90,13 +112,20 @@ class DerivativeService {
                 "type": type
             ]
         )
+
+        print("✅ [DerivativeService] Event emitted to AppBus")
     }
 
     // MARK: - Queue Message Processing
 
     /// Process derivative.create message from queue
     private func processDerivativeMessage(_ message: QueueMessage) async -> Bool {
+        print("📦 [DerivativeService] Received message from queue")
+        print("   Message ID: \(message.id)")
+        print("   Event Type: \(message.eventType)")
+
         guard let payload = message.getPayload() else {
+            print("❌ [DerivativeService] Invalid message payload")
             logger.error(
                 "Invalid message payload",
                 eventType: "derivative.queue.error",
@@ -108,6 +137,8 @@ class DerivativeService {
         guard let fileId = payload["file_id"] as? String,
               let filePath = payload["file_path"] as? String,
               let type = payload["type"] as? String else {
+            print("❌ [DerivativeService] Missing required fields in payload")
+            print("   Payload: \(payload)")
             logger.error(
                 "Missing required fields in payload",
                 eventType: "derivative.queue.error",
@@ -118,6 +149,12 @@ class DerivativeService {
             )
             return false
         }
+
+        print("🔧 [DerivativeService] Processing derivative generation")
+        print("   File ID: \(fileId)")
+        print("   File Path: \(filePath)")
+        print("   Type: \(type)")
+        print("   Delivery Count: \(message.deliveryCount)")
 
         logger.info(
             "Processing derivative generation from queue",
@@ -132,6 +169,8 @@ class DerivativeService {
 
         // Find generator
         guard let generator = generators[type] else {
+            print("❌ [DerivativeService] No generator found for type: \(type)")
+            print("   Available generators: \(Array(generators.keys))")
             logger.error(
                 "No generator found for type: \(type)",
                 eventType: "derivative.queue.error",
@@ -143,26 +182,32 @@ class DerivativeService {
             return false
         }
 
+        print("🎯 [DerivativeService] Found generator: \(generator.displayName)")
+
+        // Resolve file path to absolute path if needed
+        let absolutePath = resolveToAbsolutePath(filePath)
+        print("📁 [DerivativeService] Resolved path: \(absolutePath)")
+
         // Create FileItem from payload
-        guard let fileURL = URL(string: filePath) else {
-            logger.error(
-                "Invalid file path: \(filePath)",
-                eventType: "derivative.queue.error",
-                metadata: ["message_id": message.id]
-            )
-            return false
-        }
+        let fileURL = URL(fileURLWithPath: absolutePath)
 
         let file = createFileItem(
             id: fileId,
-            path: filePath,
+            path: absolutePath,
             url: fileURL,
             payload: payload
         )
 
         // Generate derivative
         do {
+            print("⚡ [DerivativeService] Starting generation...")
             let outputPath = try await generator.generate(file: file)
+
+            print("✅ [DerivativeService] Derivative generated successfully!")
+            print("   Output: \(outputPath)")
+
+            // Update derivative status to complete
+            _ = storage.markDerivativeComplete(fileId: fileId, type: type, outputPath: outputPath)
 
             logger.info(
                 "Derivative generated successfully",
@@ -188,6 +233,12 @@ class DerivativeService {
 
             return true
         } catch {
+            print("❌ [DerivativeService] Derivative generation failed!")
+            print("   Error: \(error.localizedDescription)")
+
+            // Update derivative status to failed
+            _ = storage.markDerivativeFailed(fileId: fileId, type: type, errorMessage: error.localizedDescription)
+
             logger.error(
                 "Derivative generation failed: \(error.localizedDescription)",
                 eventType: "derivative.error",
@@ -230,6 +281,35 @@ class DerivativeService {
             createdAt: createdAt,
             updatedAt: updatedAt
         )
+    }
+
+    /// Resolve a potentially relative path to an absolute path
+    /// Relative paths are relative to data/file_system/storage/
+    private func resolveToAbsolutePath(_ path: String) -> String {
+        // If already absolute, return as-is
+        if path.hasPrefix("/") {
+            return path
+        }
+
+        // Resolve relative path against data/file_system/storage directory
+        guard let documentsURL = try? FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) else {
+            print("⚠️ [DerivativeService] Failed to get documents directory, using path as-is: \(path)")
+            return path
+        }
+
+        let storageDirectory = documentsURL
+            .appendingPathComponent("data", isDirectory: true)
+            .appendingPathComponent("file_system", isDirectory: true)
+            .appendingPathComponent("storage", isDirectory: true)
+
+        let absolutePath = storageDirectory.appendingPathComponent(path).path
+        print("🔧 [DerivativeService] Resolved relative path '\(path)' to '\(absolutePath)'")
+        return absolutePath
     }
 
     // MARK: - Cleanup

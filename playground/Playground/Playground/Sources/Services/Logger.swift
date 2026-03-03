@@ -123,15 +123,23 @@ class LogStreamingService {
         var message: String
         var isComplete: Bool
         var error: String?
+        var severity: LogSeverity
+        var eventType: String
+        var appId: String
+        var appName: String
     }
 
     /// Start a streaming log session
-    func startStreaming(logId: String) {
+    func startStreaming(logId: String, severity: LogSeverity, eventType: String, appId: String, appName: String) {
         queue.async(flags: .barrier) {
             self.streamingStates[logId] = StreamingState(
                 message: "",
                 isComplete: false,
-                error: nil
+                error: nil,
+                severity: severity,
+                eventType: eventType,
+                appId: appId,
+                appName: appName
             )
         }
     }
@@ -187,9 +195,16 @@ extension Logger {
         metadata: [String: Any]? = nil
     ) -> String {
         let logId = "\(appId)_\(Int(Date().timeIntervalSince1970 * 1000))"
+        let actualEventType = eventType ?? "general"
 
         // Initialize streaming state
-        LogStreamingService.shared.startStreaming(logId: logId)
+        LogStreamingService.shared.startStreaming(
+            logId: logId,
+            severity: severity,
+            eventType: actualEventType,
+            appId: appId,
+            appName: appName
+        )
 
         // Emit initial event to create the log entry (with empty message)
         var logMetadata: [String: Any] = [
@@ -197,7 +212,7 @@ extension Logger {
             "appName": appName,
             "message": "", // Will be updated as content streams
             "severity": severity.name,
-            "eventType": eventType ?? "general",
+            "eventType": actualEventType,
             "isStreaming": true
         ]
 
@@ -221,34 +236,52 @@ extension Logger {
 
     /// Complete a streaming log and persist the final message
     func completeStreamingLog(logId: String, finalMessage: String? = nil) {
-        let currentState = LogStreamingService.shared.getState(logId: logId)
-        let message = finalMessage ?? currentState?.message ?? ""
+        guard let currentState = LogStreamingService.shared.getState(logId: logId) else {
+            print("⚠️ [Logger] Attempted to complete unknown streaming log: \(logId)")
+            return
+        }
+
+        let message = finalMessage ?? currentState.message
 
         // Mark streaming as complete
         LogStreamingService.shared.completeStreaming(logId: logId, finalMessage: message)
 
-        // Emit completion event to update stored log entry
+        // Emit completion event with all required fields from the original stream
         AppBus.shared.emit(
-            type: "log.stream.complete",
-            appId: appId,
+            type: "log.\(currentState.severity.name)",
+            appId: currentState.appId,
             payload: [
-                "streamLogId": logId,
-                "finalMessage": message
+                "appId": currentState.appId,
+                "appName": currentState.appName,
+                "message": message,
+                "severity": currentState.severity.name,
+                "eventType": currentState.eventType,
+                "streamLogId": logId
             ]
         )
     }
 
     /// Fail a streaming log with an error
     func failStreamingLog(logId: String, error: String) {
+        guard let currentState = LogStreamingService.shared.getState(logId: logId) else {
+            // If no streaming state exists, emit a simple error log
+            log(error, severity: .error, eventType: "stream_error")
+            return
+        }
+
         LogStreamingService.shared.failStreaming(logId: logId, error: error)
 
-        // Emit error event
+        // Emit error event with all required fields
         AppBus.shared.emit(
-            type: "log.stream.error",
-            appId: appId,
+            type: "log.error",
+            appId: currentState.appId,
             payload: [
-                "streamLogId": logId,
-                "error": error
+                "appId": currentState.appId,
+                "appName": currentState.appName,
+                "message": error,
+                "severity": "error",
+                "eventType": "stream_error",
+                "streamLogId": logId
             ]
         )
     }

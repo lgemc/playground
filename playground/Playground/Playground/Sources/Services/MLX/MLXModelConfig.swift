@@ -10,33 +10,46 @@ enum MLXModelConfig {
         /// Performance: 70 tokens/sec on iPhone, 124 tokens/sec on iPad
         case lfm25_1b_4bit = "mlx-community/LFM2.5-1.2B-4bit"
 
-        /// Balanced: Qwen3 1.7B, 6-bit quantized (32K context)
+        /// Balanced: Qwen3.5 2B, 6-bit quantized (262K context, multimodal)
         /// Performance: 25-35 tokens/sec
-        case qwen3_1_7b_6bit = "mlx-community/Qwen3-1.7B-6bit"
+        case qwen3_5_2b_6bit = "mlx-community/Qwen3.5-2B-6bit"
 
-        /// Higher quality: Qwen3 4B, 6-bit quantized (32K context)
-        /// Performance: 15-20 tokens/sec
-        case qwen3_4b_6bit = "mlx-community/Qwen3-4B-6bit"
+        /// Meta Llama 3.2 3B, 4-bit quantized (128K context)
+        /// Performance: 20-25 tokens/sec, balanced quality and speed
+        case llama3_2_3b_4bit = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
-        /// High quality: 7B parameter model, 4-bit quantized
-        /// Performance: 8-15 tokens/sec (slower but higher quality)
-        case mistral_7b_4bit = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
+        // COMMENTED OUT - Less commonly used models
+        // /// Meta Llama 3.2 3B, 8-bit quantized (128K context)
+        // /// Performance: 18-22 tokens/sec, higher quality than 4-bit
+        // case llama3_2_3b_8bit = "mlx-community/Llama-3.2-3B-Instruct-8bit"
+        //
+        // /// Higher quality: Qwen3.5 4B, 6-bit quantized (262K context, multimodal)
+        // /// Performance: 15-20 tokens/sec
+        // case qwen3_5_4b_6bit = "mlx-community/Qwen3.5-4B-6bit"
+        //
+        // /// High quality: 7B parameter model, 4-bit quantized
+        // /// Performance: 8-15 tokens/sec (slower but higher quality)
+        // case mistral_7b_4bit = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
 
         var estimatedMemoryMB: Int {
             switch self {
             case .lfm25_1b_4bit: return 800  // ~800MB
-            case .qwen3_1_7b_6bit: return 1400  // ~1.4GB (6-bit quantized)
-            case .qwen3_4b_6bit: return 2800  // ~2.8GB (6-bit quantized)
-            case .mistral_7b_4bit: return 4500  // ~4.5GB
+            case .qwen3_5_2b_6bit: return 1600  // ~1.6GB (6-bit quantized)
+            case .llama3_2_3b_4bit: return 1850  // ~1.85GB (4-bit quantized)
+            // case .llama3_2_3b_8bit: return 3200  // ~3.2GB (8-bit quantized)
+            // case .qwen3_5_4b_6bit: return 2800  // ~2.8GB (6-bit quantized)
+            // case .mistral_7b_4bit: return 4500  // ~4.5GB
             }
         }
 
         var tokensPerSecond: Int {
             switch self {
             case .lfm25_1b_4bit: return 70
-            case .qwen3_1_7b_6bit: return 30
-            case .qwen3_4b_6bit: return 18
-            case .mistral_7b_4bit: return 10
+            case .qwen3_5_2b_6bit: return 30
+            case .llama3_2_3b_4bit: return 22
+            // case .llama3_2_3b_8bit: return 20
+            // case .qwen3_5_4b_6bit: return 18
+            // case .mistral_7b_4bit: return 10
             }
         }
     }
@@ -167,9 +180,9 @@ enum MLXModelConfig {
     /// Automatically select best chat model based on available memory
     static func recommendedChatModel(availableMemoryGB: Double) -> ChatModel {
         if availableMemoryGB >= 8 {
-            return .qwen3_1_7b_6bit  // Balanced - avoid OOM
+            return .qwen3_5_2b_6bit  // Balanced - avoid OOM
         } else if availableMemoryGB >= 4 {
-            return .qwen3_1_7b_6bit  // Balanced
+            return .qwen3_5_2b_6bit  // Balanced
         } else {
             return .lfm25_1b_4bit  // Fast & efficient
         }

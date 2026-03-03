@@ -47,8 +47,8 @@ class FileExtractionService {
             throw ExtractionError.fileNotFound
         }
 
-        // Extract text
-        let extractedText = try extractText(from: file.path)
+        // Extract text using absolute path
+        let extractedText = try extractText(from: file.absolutePath)
 
         // Update file with extracted text
         let updateResult = FileStorage.shared.updateFile(id: fileId, extractedText: extractedText)

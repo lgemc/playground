@@ -58,12 +58,31 @@ struct VideoPlayerView: View {
     }
 
     private func loadVideo() {
-        guard FileManager.default.fileExists(atPath: file.path) else {
-            loadError = "File not found at path: \(file.path)"
+        let absolutePath = file.absolutePath
+
+        // Debug logging
+        print("🎥 VideoPlayerView - Loading video:")
+        print("   File name: \(file.name)")
+        print("   File.path: \(file.path)")
+        print("   File.relativePath: \(file.relativePath ?? "nil")")
+        print("   File.folderPath: \(file.folderPath ?? "nil")")
+        print("   Computed absolutePath: \(absolutePath)")
+        print("   File exists: \(FileManager.default.fileExists(atPath: absolutePath))")
+
+        // List files in Documents to see what's actually there
+        if let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            print("   Documents path: \(documentsURL.path)")
+            if let filesInDocs = try? FileManager.default.contentsOfDirectory(atPath: documentsURL.path) {
+                print("   Contents of Documents: \(filesInDocs)")
+            }
+        }
+
+        guard FileManager.default.fileExists(atPath: absolutePath) else {
+            loadError = "File not found at path: \(absolutePath)"
             return
         }
 
-        let url = URL(fileURLWithPath: file.path)
+        let url = URL(fileURLWithPath: absolutePath)
 
         // Verify the video file is readable
         let asset = AVAsset(url: url)

@@ -47,11 +47,11 @@ class MLXAudioTTSService {
 
         // Start loading
         let task = Task {
-            print("📦 Loading MLX TTS model (Soprano-80M)...")
+            print("📦 Loading MLX TTS model (Soprano-1.1-80M)...")
             print("   This may take a moment on first run (downloading ~80MB)...")
 
-            // Load Soprano model (small, fast, high quality)
-            model = try await SopranoModel.fromPretrained("mlx-community/Soprano-80M-bf16")
+            // Load Soprano 1.1 model (95% fewer hallucinations, better single-word quality)
+            model = try await SopranoModel.fromPretrained("mlx-community/Soprano-1.1-80M-bf16")
 
             print("✅ MLX TTS model loaded successfully")
         }
@@ -60,6 +60,25 @@ class MLXAudioTTSService {
         try await task.value
         loadTask = nil
     }
+
+    // MARK: - Text Preprocessing
+
+    /// Preprocess text for optimal TTS quality
+    /// Soprano works best with 2-15 second inputs. Single words need padding.
+    private func preprocessTextForTTS(_ text: String) -> String {
+        let words = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+
+        // Single word: add minimal context to reach optimal TTS length
+        if words.count == 1 {
+            // Using ellipsis for gentle padding (works well with TTS)
+            // This prevents syllable cut-off issues common with isolated words
+            return "..., \(text)."
+        }
+
+        return text
+    }
+
+    // MARK: - Speech Synthesis
 
     /// Generate speech from text
     /// - Parameters:
@@ -80,8 +99,14 @@ class MLXAudioTTSService {
 
         print("🎵 Generating audio with MLX TTS (silent): \(text.prefix(50))...")
 
+        // Preprocess text for better quality with single words
+        let processedText = preprocessTextForTTS(text)
+        if processedText != text {
+            print("   Preprocessed single word: '\(text)' -> '\(processedText)'")
+        }
+
         // Generate audio array - simplified API
-        let audioMLXArray = try await model.generate(text: text)
+        let audioMLXArray = try await model.generate(text: processedText)
 
         // Convert MLXArray to [Float]
         let audioArray = audioMLXArray.asArray(Float.self)
@@ -99,6 +124,14 @@ class MLXAudioTTSService {
 
     /// Convert MLX audio array to WAV/CAF data
     private func convertAudioArrayToWAV(audioArray: [Float], sampleRate: Double) throws -> Data {
+        // Add silence padding for single-word inputs (prevents cut-offs)
+        let silenceDuration = 0.25  // 250ms before and after
+        let silenceSamples = Int(sampleRate * silenceDuration)
+        let silence = [Float](repeating: 0.0, count: silenceSamples)
+
+        // Pad audio: silence + audio + silence
+        let paddedArray = silence + audioArray + silence
+
         // Create audio format (PCM Float32)
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -109,20 +142,20 @@ class MLXAudioTTSService {
             throw MLXAudioTTSError.bufferCreationFailed
         }
 
-        // Create PCM buffer
-        let frameCount = AVAudioFrameCount(audioArray.count)
+        // Create PCM buffer with padded length
+        let frameCount = AVAudioFrameCount(paddedArray.count)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
             throw MLXAudioTTSError.bufferCreationFailed
         }
 
         buffer.frameLength = frameCount
 
-        // Copy audio data
+        // Copy padded audio data
         guard let channelData = buffer.floatChannelData else {
             throw MLXAudioTTSError.bufferCreationFailed
         }
 
-        for (index, sample) in audioArray.enumerated() {
+        for (index, sample) in paddedArray.enumerated() {
             channelData[0][index] = sample
         }
 

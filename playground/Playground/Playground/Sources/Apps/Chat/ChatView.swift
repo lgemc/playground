@@ -12,7 +12,7 @@ struct ChatView: View {
     @State private var scrollTarget: String?
     @State private var useMLX = true // Toggle: true = local MLX, false = OpenAI
     @State private var isLoadingChat = false
-    @State private var selectedModel: MLXModelConfig.ChatModel = .qwen3_1_7b_6bit
+    @State private var selectedModel: MLXModelConfig.ChatModel = .qwen3_5_2b_6bit
 
     private let autocompletion = AutocompletionService.shared
     private let mlx = MLXService.shared
@@ -35,7 +35,7 @@ struct ChatView: View {
                             MessageBubble(
                                 message: message,
                                 timeFormatter: Self.timeFormatter,
-                                useMarkdown: false
+                                useMarkdown: true
                             )
                             .id(message.id)
                         }
@@ -50,7 +50,7 @@ struct ChatView: View {
                                     content: streamingContent
                                 ),
                                 timeFormatter: Self.timeFormatter,
-                                useMarkdown: false
+                                useMarkdown: true
                             )
                             .id("streaming")
                         }
@@ -411,12 +411,16 @@ struct ChatView: View {
         switch model {
         case .lfm25_1b_4bit:
             return "1.2B"
-        case .qwen3_1_7b_6bit:
-            return "1.7B"
-        case .qwen3_4b_6bit:
-            return "4B"
-        case .mistral_7b_4bit:
-            return "7B"
+        case .qwen3_5_2b_6bit:
+            return "2B"
+        case .llama3_2_3b_4bit:
+            return "3B"
+        // case .llama3_2_3b_8bit:
+        //     return "3B"
+        // case .qwen3_5_4b_6bit:
+        //     return "4B"
+        // case .mistral_7b_4bit:
+        //     return "7B"
         }
     }
 
@@ -424,12 +428,16 @@ struct ChatView: View {
         switch model {
         case .lfm25_1b_4bit:
             return "LFM 1.2B (Fast, ~800MB)"
-        case .qwen3_1_7b_6bit:
-            return "Qwen3 1.7B (Balanced, ~1.4GB)"
-        case .qwen3_4b_6bit:
-            return "Qwen3 4B (Quality, ~2.8GB)"
-        case .mistral_7b_4bit:
-            return "Mistral 7B (Best, ~4.5GB)"
+        case .qwen3_5_2b_6bit:
+            return "Qwen3.5 2B (Balanced, ~1.6GB)"
+        case .llama3_2_3b_4bit:
+            return "Llama 3.2 3B-4bit (~1.85GB)"
+        // case .llama3_2_3b_8bit:
+        //     return "Llama 3.2 3B-8bit (HQ, ~3.2GB)"
+        // case .qwen3_5_4b_6bit:
+        //     return "Qwen3.5 4B (Quality, ~2.8GB)"
+        // case .mistral_7b_4bit:
+        //     return "Mistral 7B (Best, ~4.5GB)"
         }
     }
 }

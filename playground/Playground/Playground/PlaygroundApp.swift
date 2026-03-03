@@ -9,6 +9,9 @@ struct PlaygroundApp: App {
         print("📦 Initializing AppRegistry...")
         _ = AppRegistry.shared
 
+        print("🎮 Initializing AppRuntimeManager...")
+        _ = AppRuntimeManager.shared
+
         print("⚙️ Initializing ConfigService...")
         _ = ConfigService.shared
 
@@ -48,11 +51,7 @@ struct PlaygroundApp: App {
 }
 
 struct ContentView: View {
-    @StateObject private var registry = AppRegistry.shared
-
     var body: some View {
-        NavigationStack {
-            LauncherView()
-        }
+        PlaygroundContainer()
     }
 }

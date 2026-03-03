@@ -276,6 +276,30 @@ class PlaygroundDatabase {
             print("✅ Created folders table and updated files schema")
         }
 
+        // Migration v8: Derivatives table
+        migrator.registerMigration("v8_derivatives") { db in
+            print("🔄 Creating derivatives table...")
+
+            try db.create(table: "derivatives") { t in
+                t.column("id", .text).primaryKey()
+                t.column("file_id", .text).notNull()
+                    .indexed()
+                    .references("files", onDelete: .cascade)
+                t.column("type", .text).notNull().indexed()
+                t.column("status", .text).notNull().indexed()
+                t.column("output_path", .text)
+                t.column("error_message", .text)
+                t.column("created_at", .datetime).notNull()
+                t.column("updated_at", .datetime).notNull()
+                t.column("completed_at", .datetime)
+            }
+
+            // Create composite index for efficient queries
+            try db.create(index: "idx_derivatives_file_type", on: "derivatives", columns: ["file_id", "type"])
+
+            print("✅ Created derivatives table")
+        }
+
         try migrator.migrate(queue)
     }
 

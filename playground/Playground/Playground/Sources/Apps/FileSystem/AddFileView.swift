@@ -169,31 +169,33 @@ struct AddFileView: View {
                 // Determine file name
                 let fileName = customName.isEmpty ? fileInfo.name : customName
 
-                // Create app's files directory structure
+                // Create app's storage directory structure: data/file_system/storage/
                 let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let filesDirectory = documentsURL.appendingPathComponent("Files")
+                let storageDirectory = documentsURL
+                    .appendingPathComponent("data", isDirectory: true)
+                    .appendingPathComponent("file_system", isDirectory: true)
+                    .appendingPathComponent("storage", isDirectory: true)
 
-                // Create the Files directory if it doesn't exist
-                try FileManager.default.createDirectory(at: filesDirectory, withIntermediateDirectories: true)
+                // Create the storage directory if it doesn't exist
+                try FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
 
-                // Create folder path within Files directory if needed
+                // Create folder path within storage directory if needed
                 let destinationFolder: URL
                 if folderPath.isEmpty {
-                    destinationFolder = filesDirectory
+                    destinationFolder = storageDirectory
                 } else {
-                    destinationFolder = filesDirectory.appendingPathComponent(folderPath)
+                    destinationFolder = storageDirectory.appendingPathComponent(folderPath)
                     try FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
                 }
 
-                // Create destination URL with unique name if file already exists
-                var destinationURL = destinationFolder.appendingPathComponent(fileName)
-                var counter = 1
-                while FileManager.default.fileExists(atPath: destinationURL.path) {
-                    let nameWithoutExt = (fileName as NSString).deletingPathExtension
-                    let ext = (fileName as NSString).pathExtension
-                    let uniqueName = ext.isEmpty ? "\(nameWithoutExt)_\(counter)" : "\(nameWithoutExt)_\(counter).\(ext)"
-                    destinationURL = destinationFolder.appendingPathComponent(uniqueName)
-                    counter += 1
+                // Create destination URL - fail if file already exists
+                let destinationURL = destinationFolder.appendingPathComponent(fileName)
+                if FileManager.default.fileExists(atPath: destinationURL.path) {
+                    throw NSError(
+                        domain: "FileStorage",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "File '\(fileName)' already exists at this location"]
+                    )
                 }
 
                 // Copy file to app's storage
@@ -204,10 +206,19 @@ struct AddFileView: View {
                 // Detect MIME type
                 let mimeType = detectMimeType(fileExtension: fileInfo.fileExtension)
 
-                // Create file in storage with the new internal path
+                // Calculate relative path from storage directory
+                let relativePath = destinationURL.path.replacingOccurrences(
+                    of: storageDirectory.path + "/",
+                    with: ""
+                )
+
+                print("   Relative path (from storage): \(relativePath)")
+                print("   Storage directory: \(storageDirectory.path)")
+
+                // Create file in storage with relative path
                 let fileResult = FileStorage.shared.createFile(
                     name: destinationURL.lastPathComponent,
-                    path: destinationURL.path,
+                    path: relativePath,  // Store relative path instead of absolute
                     folderPath: folderPath,
                     mimeType: mimeType,
                     sizeBytes: fileInfo.size

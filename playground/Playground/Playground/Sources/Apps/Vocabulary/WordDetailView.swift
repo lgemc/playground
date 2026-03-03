@@ -10,6 +10,7 @@ struct WordDetailView: View {
     @State private var audioPlayer: AVAudioPlayer?
     @State private var currentlyPlayingIndex: Int?
     @State private var isGenerating = false
+    @State private var isGeneratingAudio = false
     @State private var currentWord: VocabularyWord
 
     private let audioService = VocabularyAudioService.shared
@@ -107,12 +108,18 @@ struct WordDetailView: View {
                             Spacer()
                             Button(action: { generateAudio() }) {
                                 HStack {
-                                    Image(systemName: "arrow.clockwise")
+                                    if isGeneratingAudio {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
                                     Text("Regenerate")
                                 }
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                            .disabled(isGeneratingAudio)
                         }
                     } else {
                         VStack(alignment: .leading, spacing: 12) {
@@ -122,12 +129,17 @@ struct WordDetailView: View {
 
                             Button(action: { generateAudio() }) {
                                 HStack {
-                                    Image(systemName: "speaker.wave.2.fill")
+                                    if isGeneratingAudio {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Image(systemName: "speaker.wave.2.fill")
+                                    }
                                     Text("Generate Audio")
                                 }
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(isGenerating)
+                            .disabled(isGeneratingAudio)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -224,7 +236,7 @@ struct WordDetailView: View {
 
     private func generateAudio() {
         Task {
-            isGenerating = true
+            isGeneratingAudio = true
             print("🔄 Generating audio for: \(currentWord.word)")
 
             do {
@@ -234,14 +246,14 @@ struct WordDetailView: View {
                 if let updatedWord = try await storage.getWord(id: currentWord.id).get() {
                     await MainActor.run {
                         currentWord = updatedWord
-                        isGenerating = false
+                        isGeneratingAudio = false
                     }
                     print("✅ Audio generation completed")
                 }
             } catch {
                 print("❌ Failed to generate audio: \(error)")
                 await MainActor.run {
-                    isGenerating = false
+                    isGeneratingAudio = false
                 }
             }
         }

@@ -37,6 +37,8 @@ class QueueService {
 
     /// Initialize the queue service and database
     func initialize() {
+        print("🚀 [QueueService] Initializing...")
+
         // Tables are created via migrations in PlaygroundDatabase
         // Subscribe to all events from the AppBus
         busSubscriptionId = AppBus.shared.subscribeToAll { [weak self] event in
@@ -44,6 +46,10 @@ class QueueService {
                 await self?.handleBusEvent(event)
             }
         }
+
+        let enabledQueues = QueueConfigs.getEnabled()
+        print("   Enabled queues: \(enabledQueues.map { $0.name }.joined(separator: ", "))")
+        print("✅ [QueueService] Initialization complete!")
     }
 
     // MARK: - Event Handling
@@ -417,15 +423,19 @@ class QueueService {
                 return
             }
 
+            print("🔄 [QueueService] Processing message for '\(subscriber.name ?? subscriber.id)' (event: \(message.eventType))")
+
             let success = await subscriber.callback(message)
 
             if success {
+                print("✅ [QueueService] Message processed successfully, acknowledging...")
                 try await acknowledge(message.id)
             } else {
+                print("❌ [QueueService] Message processing failed, rejecting...")
                 try await reject(message.id)
             }
         } catch {
-            print("❌ Error processing message for subscriber \(subscriber.id): \(error)")
+            print("❌ [QueueService] Error processing message for subscriber \(subscriber.id): \(error)")
         }
     }
 

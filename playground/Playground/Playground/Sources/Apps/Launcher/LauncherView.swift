@@ -3,27 +3,37 @@ import SwiftUI
 /// Launcher view - the "home screen" showing all available apps
 struct LauncherView: View {
     @StateObject private var registry = AppRegistry.shared
+    @State private var showingSettings = false
 
     private let columns = [
         GridItem(.adaptive(minimum: 100, maximum: 120), spacing: 20)
     ]
 
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 20) {
-                ForEach(registry.getAllApps(), id: \.id) { app in
-                    AppIconButton(app: app)
+        NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 20) {
+                    ForEach(registry.getAllApps(), id: \.id) { app in
+                        AppIconButton(app: app)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Playground")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gear")
+                    }
                 }
             }
-            .padding()
-        }
-        .navigationTitle("Playground")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink(destination: SettingsPlaceholder()) {
-                    Image(systemName: "gear")
+            .sheet(isPresented: $showingSettings) {
+                NavigationStack {
+                    SettingsPlaceholder()
                 }
-            }
+            }   
         }
     }
 }
@@ -31,9 +41,18 @@ struct LauncherView: View {
 /// Individual app icon button in the launcher
 struct AppIconButton: View {
     let app: any SubApp
+    @StateObject private var runtimeManager = AppRuntimeManager.shared
 
     var body: some View {
-        NavigationLink(destination: AppContainerView(app: app)) {
+        Button {
+            Task {
+                // Launch app using AppRuntimeManager
+                // This will either create a new instance or switch to existing one
+                await runtimeManager.launchApp(appId: app.id) {
+                    return app
+                }
+            }
+        } label: {
             VStack(spacing: 8) {
                 // App Icon
                 ZStack {
@@ -56,27 +75,6 @@ struct AppIconButton: View {
             .frame(width: 100)
         }
         .buttonStyle(.plain)
-    }
-}
-
-/// Container view that wraps a sub-app and manages lifecycle
-struct AppContainerView: View {
-    let app: any SubApp
-
-    var body: some View {
-        AnyView(app.buildView())
-            .navigationTitle(app.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                Task {
-                    await AppRegistry.shared.navigateTo(appId: app.id)
-                }
-            }
-            .onDisappear {
-                Task {
-                    await AppRegistry.shared.returnToLauncher()
-                }
-            }
     }
 }
 

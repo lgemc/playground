@@ -73,12 +73,13 @@ struct PDFViewerView: View {
     }
 
     private func loadPDF() {
-        guard FileManager.default.fileExists(atPath: file.path) else {
-            loadError = "File not found at path: \(file.path)"
+        let absolutePath = file.absolutePath
+        guard FileManager.default.fileExists(atPath: absolutePath) else {
+            loadError = "File not found at path: \(absolutePath)"
             return
         }
 
-        let url = URL(fileURLWithPath: file.path)
+        let url = URL(fileURLWithPath: absolutePath)
 
         guard let document = PDFDocument(url: url) else {
             loadError = "Failed to load PDF document"

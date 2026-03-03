@@ -17,8 +17,9 @@ class FileStorage {
                    sizeBytes: Int64? = nil,
                    extractedText: String? = nil) -> Result<File, Error> {
         return Result {
-            // Calculate relative path
-            let relativePath = folderPath.isEmpty ? name : "\(folderPath)\(name)"
+            // Use the provided path as relativePath since AddFileView calculates it correctly
+            // The path parameter from AddFileView includes "Files/" prefix
+            let relativePath = path
 
             let file = File(
                 name: name,
@@ -29,6 +30,13 @@ class FileStorage {
                 sizeBytes: sizeBytes,
                 extractedText: extractedText
             )
+
+            // Debug logging
+            print("💾 FileStorage.createFile:")
+            print("   name: \(name)")
+            print("   path: \(path)")
+            print("   relativePath: \(relativePath)")
+            print("   folderPath: \(folderPath)")
 
             try database.execute { db in
                 try file.insert(db)
@@ -115,10 +123,11 @@ class FileStorage {
             } else {
                 // For hard delete, also remove the physical file
                 if let file = fileToDelete {
-                    let fileURL = URL(fileURLWithPath: file.path)
-                    if FileManager.default.fileExists(atPath: file.path) {
+                    let absolutePath = file.absolutePath
+                    let fileURL = URL(fileURLWithPath: absolutePath)
+                    if FileManager.default.fileExists(atPath: absolutePath) {
                         try FileManager.default.removeItem(at: fileURL)
-                        print("✅ Deleted file from disk: \(file.path)")
+                        print("✅ Deleted file from disk: \(absolutePath)")
                     }
                 }
 
@@ -428,6 +437,130 @@ class FileStorage {
             }
         }
     }
+
+    // MARK: - Maintenance
+
+    /// Clean up orphaned files (physical files that don't exist in database)
+    /// and remove old Files directory if it exists
+    func cleanupOrphanedFiles() -> Result<CleanupReport, Error> {
+        return Result {
+            var report = CleanupReport()
+            let fileManager = FileManager.default
+            let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+            // 1. Clean up OLD storage location (Documents/Files/)
+            let oldStorageURL = documentsURL.appendingPathComponent("Files")
+            if fileManager.fileExists(atPath: oldStorageURL.path) {
+                print("🧹 Found old storage location: \(oldStorageURL.path)")
+                do {
+                    try fileManager.removeItem(at: oldStorageURL)
+                    report.oldDirectoryRemoved = true
+                    print("✅ Removed old Files directory")
+                } catch {
+                    print("⚠️ Failed to remove old Files directory: \(error)")
+                    report.errors.append("Failed to remove old Files directory: \(error.localizedDescription)")
+                }
+            }
+
+            // 2. Get all files from database
+            let allFiles = try database.read { db in
+                try File.filter(File.Columns.deletedAt == nil).fetchAll(db)
+            }
+
+            let databasePaths = Set(allFiles.compactMap { file -> String? in
+                return file.absolutePath
+            })
+
+            print("📊 Database has \(databasePaths.count) files")
+
+            // 3. Scan physical storage directory
+            let storageDirectory = documentsURL
+                .appendingPathComponent("data", isDirectory: true)
+                .appendingPathComponent("file_system", isDirectory: true)
+                .appendingPathComponent("storage", isDirectory: true)
+
+            guard fileManager.fileExists(atPath: storageDirectory.path) else {
+                print("⚠️ Storage directory doesn't exist: \(storageDirectory.path)")
+                return report
+            }
+
+            // Recursively find all files in storage
+            if let enumerator = fileManager.enumerator(
+                at: storageDirectory,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for case let fileURL as URL in enumerator {
+                    guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                          let isRegularFile = resourceValues.isRegularFile,
+                          isRegularFile else {
+                        continue
+                    }
+
+                    let physicalPath = fileURL.path
+
+                    // Check if this physical file exists in database
+                    if !databasePaths.contains(physicalPath) {
+                        print("🗑️ Orphaned file found: \(physicalPath)")
+                        do {
+                            try fileManager.removeItem(at: fileURL)
+                            report.orphanedFilesRemoved += 1
+                            print("✅ Removed orphaned file: \(fileURL.lastPathComponent)")
+                        } catch {
+                            print("⚠️ Failed to remove orphaned file: \(error)")
+                            report.errors.append("Failed to remove \(fileURL.lastPathComponent): \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
+
+            // 4. Clean up empty directories
+            try cleanupEmptyDirectories(at: storageDirectory, report: &report)
+
+            print("🧹 Cleanup complete:")
+            print("   - Orphaned files removed: \(report.orphanedFilesRemoved)")
+            print("   - Empty directories removed: \(report.emptyDirectoriesRemoved)")
+            print("   - Old directory removed: \(report.oldDirectoryRemoved)")
+            print("   - Errors: \(report.errors.count)")
+
+            return report
+        }
+    }
+
+    private func cleanupEmptyDirectories(at url: URL, report: inout CleanupReport) throws {
+        let fileManager = FileManager.default
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        // Collect directories (deepest first by sorting in reverse)
+        var directories: [URL] = []
+        for case let fileURL as URL in enumerator {
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]),
+                  let isDirectory = resourceValues.isDirectory,
+                  isDirectory else {
+                continue
+            }
+            directories.append(fileURL)
+        }
+
+        // Sort by path depth (deepest first) to delete from bottom up
+        directories.sort { $0.path.components(separatedBy: "/").count > $1.path.components(separatedBy: "/").count }
+
+        for directory in directories {
+            // Check if directory is empty
+            let contents = try fileManager.contentsOfDirectory(atPath: directory.path)
+            if contents.isEmpty {
+                try fileManager.removeItem(at: directory)
+                report.emptyDirectoriesRemoved += 1
+                print("✅ Removed empty directory: \(directory.lastPathComponent)")
+            }
+        }
+    }
 }
 
 // MARK: - Supporting Types
@@ -442,6 +575,33 @@ struct FileStatistics {
         formatter.allowedUnits = [.useKB, .useMB, .useGB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: totalSizeBytes)
+    }
+}
+
+struct CleanupReport {
+    var orphanedFilesRemoved: Int = 0
+    var emptyDirectoriesRemoved: Int = 0
+    var oldDirectoryRemoved: Bool = false
+    var errors: [String] = []
+
+    var summary: String {
+        var lines: [String] = []
+        if orphanedFilesRemoved > 0 {
+            lines.append("Removed \(orphanedFilesRemoved) orphaned file(s)")
+        }
+        if emptyDirectoriesRemoved > 0 {
+            lines.append("Removed \(emptyDirectoriesRemoved) empty director(ies)")
+        }
+        if oldDirectoryRemoved {
+            lines.append("Removed old Files directory")
+        }
+        if errors.isEmpty && lines.isEmpty {
+            return "No cleanup needed - storage is clean"
+        }
+        if !errors.isEmpty {
+            lines.append("\(errors.count) error(s) occurred")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 

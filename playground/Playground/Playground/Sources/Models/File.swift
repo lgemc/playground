@@ -72,6 +72,22 @@ extension File: FetchableRecord, PersistableRecord {
 
 // Computed properties
 extension File {
+    /// Get the absolute path to the file (resolves relative paths)
+    var absolutePath: String {
+        // If we have a relative path, resolve it to absolute
+        // Relative paths are relative to data/file_system/storage/
+        if let relPath = relativePath, !relPath.isEmpty {
+            let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let storageDirectory = documentsURL
+                .appendingPathComponent("data", isDirectory: true)
+                .appendingPathComponent("file_system", isDirectory: true)
+                .appendingPathComponent("storage", isDirectory: true)
+            return storageDirectory.appendingPathComponent(relPath).path
+        }
+        // Otherwise return the stored path (could be absolute or relative)
+        return path
+    }
+
     /// Human-readable file size
     var formattedSize: String {
         guard let bytes = sizeBytes else { return "Unknown" }
