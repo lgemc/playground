@@ -385,12 +385,19 @@ struct FileDetailView: View {
         if path.hasPrefix("/") {
             absolutePath = path
         } else {
-            // Assume it's relative to Documents
-            if let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                absolutePath = documentsURL.appendingPathComponent(path).path
-            } else {
+            // Path is relative to Documents/data/file_system/storage/
+            guard let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+                print("❌ Could not access documents directory")
                 return nil
             }
+
+            let storageURL = documentsURL
+                .appendingPathComponent("data")
+                .appendingPathComponent("file_system")
+                .appendingPathComponent("storage")
+                .appendingPathComponent(path)
+
+            absolutePath = storageURL.path
         }
 
         guard FileManager.default.fileExists(atPath: absolutePath) else {

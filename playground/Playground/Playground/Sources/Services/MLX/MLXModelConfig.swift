@@ -25,7 +25,7 @@ enum MLXModelConfig {
         //
         // /// Higher quality: Qwen3.5 4B, 6-bit quantized (262K context, multimodal)
         // /// Performance: 15-20 tokens/sec
-        // case qwen3_5_4b_6bit = "mlx-community/Qwen3.5-4B-6bit"
+        case qwen3_5_4b_4bit = "mlx-community/Qwen3-4B-4bit"
         //
         // /// High quality: 7B parameter model, 4-bit quantized
         // /// Performance: 8-15 tokens/sec (slower but higher quality)
@@ -37,7 +37,7 @@ enum MLXModelConfig {
             case .qwen3_5_2b_6bit: return 1600  // ~1.6GB (6-bit quantized)
             case .llama3_2_3b_4bit: return 1850  // ~1.85GB (4-bit quantized)
             // case .llama3_2_3b_8bit: return 3200  // ~3.2GB (8-bit quantized)
-            // case .qwen3_5_4b_6bit: return 2800  // ~2.8GB (6-bit quantized)
+            case .qwen3_5_4b_4bit: return 2800  // ~2.8GB (6-bit quantized)
             // case .mistral_7b_4bit: return 4500  // ~4.5GB
             }
         }
@@ -48,7 +48,7 @@ enum MLXModelConfig {
             case .qwen3_5_2b_6bit: return 30
             case .llama3_2_3b_4bit: return 22
             // case .llama3_2_3b_8bit: return 20
-            // case .qwen3_5_4b_6bit: return 18
+            case .qwen3_5_4b_4bit: return 18
             // case .mistral_7b_4bit: return 10
             }
         }

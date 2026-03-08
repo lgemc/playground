@@ -52,8 +52,17 @@ class MLXWhisperService {
         let modelToUse = model ?? getDefaultWhisperModel()
         let whisper = try await loadModel(modelToUse)
 
-        // Transcribe audio using WhisperKit
-        let results = try await whisper.transcribe(audioPath: audioURL.path)
+        // Configure decoding options to get clean text without timestamp tokens
+        var options = DecodingOptions()
+        options.withoutTimestamps = true  // Remove timestamp tokens from text
+        options.wordTimestamps = true     // But keep word-level timing data
+        options.skipSpecialTokens = true  // Remove other special tokens
+
+        // Transcribe audio using WhisperKit with clean text options
+        let results = try await whisper.transcribe(
+            audioPath: audioURL.path,
+            decodeOptions: options
+        )
 
         guard let transcriptionResult = results.first else {
             throw MLXWhisperError.invalidResponse

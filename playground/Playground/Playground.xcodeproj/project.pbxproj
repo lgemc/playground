@@ -17,6 +17,7 @@
 		AD46D2892F55FC4D008EF85F /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D0822F560000008EF85F /* WhisperKit */; };
 		AD46D28A2F55FC4D008EF85F /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08A2F560000008EF85F /* MLXAudioTTS */; };
 		AD46D28B2F55FC4D008EF85F /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08B2F560000008EF85F /* MLXAudioCore */; };
+		AD46D28C2F55FC4D008EF85F /* StableDiffusion in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08C2F560000008EF85F /* StableDiffusion */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -98,6 +99,7 @@
 				AD46D0822F560000008EF85F /* WhisperKit */,
 				AD46D08A2F560000008EF85F /* MLXAudioTTS */,
 				AD46D08B2F560000008EF85F /* MLXAudioCore */,
+				AD46D08C2F560000008EF85F /* StableDiffusion */,
 			);
 			productName = Playground;
 			productReference = AD46D0662F55F1FF008EF85F /* Playground.app */;
@@ -134,6 +136,7 @@
 				AD46D0872F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				AD46D0882F560000008EF85F /* XCRemoteSwiftPackageReference "WhisperKit" */,
 				AD46D0892F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
+				AD46D08D2F560000008EF85F /* XCLocalSwiftPackageReference "mlx-swift-examples-fork" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AD46D0672F55F1FF008EF85F /* Products */;
@@ -302,7 +305,7 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
@@ -345,7 +348,7 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
@@ -418,8 +421,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.29.1;
+				branch = main;
+				kind = branch;
 			};
 		};
 		AD46D0882F560000008EF85F /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
@@ -439,6 +442,13 @@
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AD46D08D2F560000008EF85F /* XCLocalSwiftPackageReference "mlx-swift-examples-fork" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../mlx-swift-examples-fork;
+		};
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		AD46D0742F560000008EF85F /* GRDB */ = {
@@ -490,6 +500,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AD46D0892F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
 			productName = MLXAudioCore;
+		};
+		AD46D08C2F560000008EF85F /* StableDiffusion */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D08D2F560000008EF85F /* XCLocalSwiftPackageReference "mlx-swift-examples-fork" */;
+			productName = StableDiffusion;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

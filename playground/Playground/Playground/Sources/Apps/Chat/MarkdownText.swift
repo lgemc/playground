@@ -31,11 +31,35 @@ struct MarkdownText: View {
         var inCodeBlock = false
         var codeBlockContent = ""
         var codeBlockLanguage = ""
+        var inTable = false
+        var tableLines: [String] = []
 
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
 
         for line in lines {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+
+            // Table detection: lines starting with | and containing |
+            if trimmedLine.hasPrefix("|") && trimmedLine.contains("|") && !inCodeBlock {
+                if !inTable {
+                    // Start of a new table
+                    if !currentText.isEmpty {
+                        blocks.append(AnyView(renderInlineMarkdown(currentText, textColor: textColor)))
+                        currentText = ""
+                    }
+                    inTable = true
+                }
+                tableLines.append(String(line))
+                continue
+            } else if inTable {
+                // End of table
+                if let tableView = parseAndRenderTable(tableLines, textColor: textColor) {
+                    blocks.append(tableView)
+                }
+                tableLines = []
+                inTable = false
+                // Continue processing this line as normal content
+            }
 
             // Code block detection
             if trimmedLine.hasPrefix("```") {
@@ -83,6 +107,13 @@ struct MarkdownText: View {
         // Handle unclosed code block
         if inCodeBlock && !codeBlockContent.isEmpty {
             blocks.append(AnyView(renderCodeBlock(codeBlockContent, language: codeBlockLanguage)))
+        }
+
+        // Handle table at end of content
+        if inTable && !tableLines.isEmpty {
+            if let tableView = parseAndRenderTable(tableLines, textColor: textColor) {
+                blocks.append(tableView)
+            }
         }
 
         return blocks
@@ -233,6 +264,146 @@ struct MarkdownText: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color(.systemGray4), lineWidth: 1)
         )
+    }
+
+    // MARK: - Table Parsing and Rendering
+
+    enum TableAlignment {
+        case left, center, right
+    }
+
+    struct TableData {
+        let headers: [String]
+        let alignments: [TableAlignment]
+        let rows: [[String]]
+    }
+
+    private static func parseAndRenderTable(_ lines: [String], textColor: Color) -> AnyView? {
+        guard lines.count >= 2 else { return nil }
+
+        // Parse header row
+        let headerCells = parseTableRow(lines[0])
+        guard !headerCells.isEmpty else { return nil }
+
+        // Parse separator row to determine alignment
+        let separatorLine = lines[1].trimmingCharacters(in: .whitespaces)
+        let alignments = parseTableAlignment(separatorLine, columnCount: headerCells.count)
+
+        // Parse data rows
+        var dataRows: [[String]] = []
+        for i in 2..<lines.count {
+            let cells = parseTableRow(lines[i])
+            if !cells.isEmpty {
+                dataRows.append(cells)
+            }
+        }
+
+        let tableData = TableData(headers: headerCells, alignments: alignments, rows: dataRows)
+        return AnyView(renderTable(tableData, textColor: textColor))
+    }
+
+    private static func parseTableRow(_ line: String) -> [String] {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("|") else { return [] }
+
+        // Remove leading and trailing |
+        var content = trimmed
+        if content.hasPrefix("|") {
+            content.removeFirst()
+        }
+        if content.hasSuffix("|") {
+            content.removeLast()
+        }
+
+        // Split by | and trim each cell
+        return content.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    private static func parseTableAlignment(_ separatorLine: String, columnCount: Int) -> [TableAlignment] {
+        let cells = parseTableRow(separatorLine)
+        var alignments: [TableAlignment] = []
+
+        for cell in cells {
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            let startsWithColon = trimmed.hasPrefix(":")
+            let endsWithColon = trimmed.hasSuffix(":")
+
+            if startsWithColon && endsWithColon {
+                alignments.append(.center)
+            } else if endsWithColon {
+                alignments.append(.right)
+            } else {
+                alignments.append(.left)
+            }
+        }
+
+        // Fill missing alignments with left
+        while alignments.count < columnCount {
+            alignments.append(.left)
+        }
+
+        return alignments
+    }
+
+    private static func renderTable(_ tableData: TableData, textColor: Color) -> some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            VStack(spacing: 0) {
+                // Header row
+                HStack(spacing: 0) {
+                    ForEach(Array(tableData.headers.enumerated()), id: \.offset) { index, header in
+                        renderTableCell(
+                            content: header,
+                            alignment: index < tableData.alignments.count ? tableData.alignments[index] : .left,
+                            isHeader: true,
+                            textColor: textColor
+                        )
+                    }
+                }
+                .background(Color(.systemGray5))
+
+                // Data rows
+                ForEach(Array(tableData.rows.enumerated()), id: \.offset) { rowIndex, row in
+                    HStack(spacing: 0) {
+                        ForEach(Array(row.enumerated()), id: \.offset) { cellIndex, cell in
+                            renderTableCell(
+                                content: cell,
+                                alignment: cellIndex < tableData.alignments.count ? tableData.alignments[cellIndex] : .left,
+                                isHeader: false,
+                                textColor: textColor
+                            )
+                        }
+                    }
+                    .background(rowIndex % 2 == 0 ? Color(.systemBackground) : Color(.systemGray6).opacity(0.3))
+                }
+            }
+            .overlay(
+                Rectangle()
+                    .stroke(Color(.systemGray4), lineWidth: 1)
+            )
+            .cornerRadius(6)
+        }
+    }
+
+    private static func renderTableCell(content: String, alignment: TableAlignment, isHeader: Bool, textColor: Color) -> some View {
+        let swiftUIAlignment: Alignment
+        switch alignment {
+        case .left:
+            swiftUIAlignment = .leading
+        case .center:
+            swiftUIAlignment = .center
+        case .right:
+            swiftUIAlignment = .trailing
+        }
+
+        return parseInlineText(content, textColor: textColor)
+            .font(isHeader ? .body.bold() : .body)
+            .frame(minWidth: 80, maxWidth: 300, alignment: swiftUIAlignment)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .overlay(
+                Rectangle()
+                    .stroke(Color(.systemGray4), lineWidth: 0.5)
+            )
     }
 
     // MARK: - Helper Functions

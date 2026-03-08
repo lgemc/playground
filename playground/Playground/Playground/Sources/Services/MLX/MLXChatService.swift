@@ -132,17 +132,22 @@ class MLXChatService: ObservableObject {
     func complete(messages: [ChatMessage],
                   model: MLXModelConfig.ChatModel? = nil,
                   temperature: Double? = nil,
-                  maxTokens: Int? = nil) async throws -> String {
+                  maxTokens: Int? = nil,
+                  enableThinking: Bool = false) async throws -> String {
 
         let modelConfig = model ?? MLXModelConfig.recommendedChatModel(availableMemoryGB: getAvailableMemoryGB())
         let llmModel = try await loadModel(modelConfig)
 
-        // Format messages into a prompt
-        let prompt = formatMessagesAsPrompt(messages)
+        // Format messages into a prompt with thinking control
+        let prompt = formatMessagesAsPrompt(messages, enableThinking: enableThinking)
+
+        // Adjust temperature based on thinking mode
+        let temp = temperature ?? (enableThinking ? 0.6 : 0.7)
+        let topP = enableThinking ? 0.95 : 0.8
 
         let generateParams = GenerateParameters(
-            temperature: Float(temperature ?? 0.7),
-            topP: Float(0.9)
+            temperature: Float(temp),
+            topP: Float(topP)
         )
 
         // Generate synchronously (non-streaming)
@@ -179,7 +184,8 @@ class MLXChatService: ObservableObject {
     func completeStream(messages: [ChatMessage],
                        model: MLXModelConfig.ChatModel? = nil,
                        temperature: Double? = nil,
-                       maxTokens: Int? = nil) -> AsyncThrowingStream<String, Error> {
+                       maxTokens: Int? = nil,
+                       enableThinking: Bool = false) -> AsyncThrowingStream<String, Error> {
 
         return AsyncThrowingStream { continuation in
             Task { @MainActor in
@@ -187,13 +193,20 @@ class MLXChatService: ObservableObject {
                     let modelConfig = model ?? MLXModelConfig.recommendedChatModel(availableMemoryGB: getAvailableMemoryGB())
                     let llmModel = try await loadModel(modelConfig)
 
-                    // Format messages into a prompt
-                    let prompt = formatMessagesAsPrompt(messages)
+                    // Format messages into a prompt with thinking control
+                    let prompt = formatMessagesAsPrompt(messages, enableThinking: enableThinking)
+
+                    // Adjust temperature based on thinking mode
+                    let temp = temperature ?? (enableThinking ? 0.6 : 0.7)
+                    let topP = enableThinking ? 0.95 : 0.8
 
                     let generateParams = GenerateParameters(
-                        temperature: Float(temperature ?? 0.7),
-                        topP: Float(0.9)
+                        temperature: Float(temp),
+                        topP: Float(topP)
                     )
+
+                    var buffer = ""
+                    var inThinkTag = false
 
                     // Stream generation
                     try await llmModel.perform { context in
@@ -209,9 +222,50 @@ class MLXChatService: ObservableObject {
 
                         for await part in tokenStream {
                             if let chunk = part.chunk {
-                                continuation.yield(chunk)
+                                if !enableThinking {
+                                    // Filter thinking content in real-time
+                                    buffer += chunk
+                                    var output = ""
+
+                                    while !buffer.isEmpty {
+                                        if inThinkTag {
+                                            if let closeRange = buffer.range(of: "</think>") {
+                                                buffer = String(buffer[closeRange.upperBound...])
+                                                inThinkTag = false
+                                            } else {
+                                                buffer = ""
+                                                break
+                                            }
+                                        } else {
+                                            if let openRange = buffer.range(of: "<think>") {
+                                                output += buffer[..<openRange.lowerBound]
+                                                buffer = String(buffer[openRange.lowerBound...])
+                                                inThinkTag = true
+                                            } else {
+                                                if buffer.count > 7 {
+                                                    let safeLength = buffer.count - 7
+                                                    let safeIndex = buffer.index(buffer.startIndex, offsetBy: safeLength)
+                                                    output += buffer[..<safeIndex]
+                                                    buffer = String(buffer[safeIndex...])
+                                                }
+                                                break
+                                            }
+                                        }
+                                    }
+
+                                    if !output.isEmpty {
+                                        continuation.yield(output)
+                                    }
+                                } else {
+                                    continuation.yield(chunk)
+                                }
                             }
                         }
+                    }
+
+                    // Flush remaining buffer
+                    if !enableThinking && !buffer.isEmpty && !inThinkTag {
+                        continuation.yield(buffer)
                     }
 
                     continuation.finish()
@@ -231,7 +285,7 @@ class MLXChatService: ObservableObject {
 
     /// Format chat messages into a single prompt string
     /// Uses Qwen3 chat template format (compatible with multiple models)
-    private func formatMessagesAsPrompt(_ messages: [ChatMessage]) -> String {
+    private func formatMessagesAsPrompt(_ messages: [ChatMessage], enableThinking: Bool = false) -> String {
         var prompt = ""
 
         for message in messages {
@@ -250,6 +304,11 @@ class MLXChatService: ObservableObject {
         // Add assistant prompt to trigger response
         prompt += "<|im_start|>assistant\n"
 
+        // When enable_thinking=False, insert empty <think></think> to skip thinking
+        if !enableThinking {
+            prompt += "<think>\n\n</think>\n\n"
+        }
+
         return prompt
     }
 
@@ -260,7 +319,8 @@ class MLXChatService: ObservableObject {
                 systemPrompt: String? = nil,
                 model: MLXModelConfig.ChatModel? = nil,
                 temperature: Double? = nil,
-                maxTokens: Int? = nil) async throws -> String {
+                maxTokens: Int? = nil,
+                enableThinking: Bool = false) async throws -> String {
         var messages: [ChatMessage] = []
 
         if let systemPrompt = systemPrompt {
@@ -273,7 +333,8 @@ class MLXChatService: ObservableObject {
             messages: messages,
             model: model,
             temperature: temperature,
-            maxTokens: maxTokens
+            maxTokens: maxTokens,
+            enableThinking: enableThinking
         )
     }
 
@@ -282,7 +343,8 @@ class MLXChatService: ObservableObject {
                      systemPrompt: String? = nil,
                      model: MLXModelConfig.ChatModel? = nil,
                      temperature: Double? = nil,
-                     maxTokens: Int? = nil) -> AsyncThrowingStream<String, Error> {
+                     maxTokens: Int? = nil,
+                     enableThinking: Bool = false) -> AsyncThrowingStream<String, Error> {
         var messages: [ChatMessage] = []
 
         if let systemPrompt = systemPrompt {
@@ -295,8 +357,25 @@ class MLXChatService: ObservableObject {
             messages: messages,
             model: model,
             temperature: temperature,
-            maxTokens: maxTokens
+            maxTokens: maxTokens,
+            enableThinking: enableThinking
         )
+    }
+
+    // MARK: - Helper Methods
+
+    /// Strip Qwen thinking content from response
+    /// Removes <think>...</think> tags and their content
+    private func stripThinkingContent(_ text: String) -> String {
+        // Pattern to match <think>...</think> with any content including newlines
+        let pattern = "<think>.*?</think>\\s*"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+            return text
+        }
+
+        let range = NSRange(text.startIndex..., in: text)
+        let result = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

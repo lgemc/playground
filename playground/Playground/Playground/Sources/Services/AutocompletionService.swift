@@ -29,6 +29,7 @@ class AutocompletionService {
         let maxTokens: Int?
         let stream: Bool
         let tools: [[String: Any]]?
+        let enableThinking: Bool?
 
         enum CodingKeys: String, CodingKey {
             case model
@@ -37,15 +38,17 @@ class AutocompletionService {
             case maxTokens = "max_tokens"
             case stream
             case tools
+            case enableThinking
         }
 
-        init(model: String, messages: [ChatMessage], temperature: Double?, maxTokens: Int?, stream: Bool, tools: [[String: Any]]? = nil) {
+        init(model: String, messages: [ChatMessage], temperature: Double?, maxTokens: Int?, stream: Bool, tools: [[String: Any]]? = nil, enableThinking: Bool? = nil) {
             self.model = model
             self.messages = messages
             self.temperature = temperature
             self.maxTokens = maxTokens
             self.stream = stream
             self.tools = tools
+            self.enableThinking = enableThinking
         }
 
         init(from decoder: Decoder) throws {
@@ -56,6 +59,7 @@ class AutocompletionService {
             maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
             stream = try container.decode(Bool.self, forKey: .stream)
             tools = nil // Tools are not decoded from JSON
+            enableThinking = try container.decodeIfPresent(Bool.self, forKey: .enableThinking)
         }
 
         func encode(to encoder: Encoder) throws {
@@ -90,7 +94,32 @@ class AutocompletionService {
                 dict["tools"] = tools
             }
 
-            return try JSONSerialization.data(withJSONObject: dict)
+            // Add parameters for Qwen thinking mode control
+            // Use both formats for compatibility with different API implementations
+            if let enableThinking = enableThinking {
+                // Format 1: OpenAI-compatible with extra_body
+                dict["extra_body"] = [
+                    "chat_template_kwargs": [
+                        "enable_thinking": enableThinking
+                    ]
+                ]
+
+                // Format 2: Direct parameter (some vLLM implementations)
+                dict["chat_template_kwargs"] = [
+                    "enable_thinking": enableThinking
+                ]
+
+                print("🔧 Setting enable_thinking=\(enableThinking)")
+            }
+
+            let jsonData = try JSONSerialization.data(withJSONObject: dict)
+
+            // Debug: print the request body
+            if let jsonString = String(data: jsonData, encoding: .utf8) {
+                print("📤 Request body: \(jsonString)")
+            }
+
+            return jsonData
         }
     }
 
@@ -159,7 +188,8 @@ class AutocompletionService {
     func complete(messages: [ChatMessage],
                   model: String? = nil,
                   temperature: Double? = nil,
-                  maxTokens: Int? = nil) async -> Result<String, Error> {
+                  maxTokens: Int? = nil,
+                  enableThinking: Bool = false) async -> Result<String, Error> {
         return await Result.catching {
             let baseURL = self.config.getString(key: "llm.base_url")
             let apiKey = self.config.getString(key: "llm.api_key")
@@ -171,7 +201,8 @@ class AutocompletionService {
                 temperature: temperature ?? self.config.getDouble(key: "llm.temperature", default: 0.7),
                 maxTokens: maxTokens ?? self.config.getInt(key: "llm.max_tokens", default: 1024),
                 stream: false,
-                tools: nil
+                tools: nil,
+                enableThinking: enableThinking
             )
 
             // Encode request manually to avoid Sendable conformance issues
@@ -195,7 +226,10 @@ class AutocompletionService {
 
             // Decode response manually to avoid Sendable conformance issues
             let response = try JSONDecoder().decode(ChatCompletionResponse.self, from: responseData)
-            return response.choices.first?.message.content ?? ""
+            let content = response.choices.first?.message.content ?? ""
+
+            // Strip thinking content if not requested
+            return enableThinking ? content : self.stripThinkingContent(content)
         }
     }
 
@@ -203,7 +237,8 @@ class AutocompletionService {
     func completeStream(messages: [ChatMessage],
                        model: String? = nil,
                        temperature: Double? = nil,
-                       maxTokens: Int? = nil) -> AsyncThrowingStream<String, Error> {
+                       maxTokens: Int? = nil,
+                       enableThinking: Bool = false) -> AsyncThrowingStream<String, Error> {
         let baseURL = config.getString(key: "llm.base_url")
         let apiKey = config.getString(key: "llm.api_key")
         let modelName = model ?? config.getString(key: "llm.model", default: "gpt-4o-mini")
@@ -214,7 +249,8 @@ class AutocompletionService {
             temperature: temperature ?? config.getDouble(key: "llm.temperature", default: 0.7),
             maxTokens: maxTokens ?? config.getInt(key: "llm.max_tokens", default: 1024),
             stream: true,
-            tools: nil
+            tools: nil,
+            enableThinking: enableThinking
         )
 
         return AsyncThrowingStream { continuation in
@@ -249,6 +285,9 @@ class AutocompletionService {
                         throw AutocompletionError.httpError(statusCode: httpResponse.statusCode)
                     }
 
+                    var buffer = ""
+                    var inThinkTag = false
+
                     for try await line in bytes.lines {
                         guard line.hasPrefix("data: ") else { continue }
                         let data = String(line.dropFirst(6))
@@ -262,10 +301,55 @@ class AutocompletionService {
                         let chunk = try JSONDecoder().decode(ChatCompletionChunk.self, from: jsonData)
 
                         if let content = chunk.choices.first?.delta.content {
-                            continuation.yield(content)
+                            if !enableThinking {
+                                // Filter thinking content in real-time
+                                buffer += content
+                                var output = ""
+
+                                while !buffer.isEmpty {
+                                    if inThinkTag {
+                                        // Look for closing tag
+                                        if let closeRange = buffer.range(of: "</think>") {
+                                            buffer = String(buffer[closeRange.upperBound...])
+                                            inThinkTag = false
+                                        } else {
+                                            // Still in think tag, skip everything
+                                            buffer = ""
+                                            break
+                                        }
+                                    } else {
+                                        // Look for opening tag
+                                        if let openRange = buffer.range(of: "<think>") {
+                                            // Output everything before the tag
+                                            output += buffer[..<openRange.lowerBound]
+                                            buffer = String(buffer[openRange.lowerBound...])
+                                            inThinkTag = true
+                                        } else {
+                                            // No tag found, output most of buffer but keep a bit in case tag is split
+                                            if buffer.count > 7 { // "<think>".count
+                                                let safeLength = buffer.count - 7
+                                                let safeIndex = buffer.index(buffer.startIndex, offsetBy: safeLength)
+                                                output += buffer[..<safeIndex]
+                                                buffer = String(buffer[safeIndex...])
+                                            }
+                                            break
+                                        }
+                                    }
+                                }
+
+                                if !output.isEmpty {
+                                    continuation.yield(output)
+                                }
+                            } else {
+                                continuation.yield(content)
+                            }
                         }
 
                         if chunk.choices.first?.finishReason != nil {
+                            // Flush any remaining buffer (excluding partial tags)
+                            if !enableThinking && !buffer.isEmpty && !inThinkTag {
+                                continuation.yield(buffer)
+                            }
                             continuation.finish()
                             return
                         }
@@ -285,7 +369,8 @@ class AutocompletionService {
                           tools: [[String: Any]]?,
                           model: String? = nil,
                           temperature: Double? = nil,
-                          maxTokens: Int? = nil) -> AsyncThrowingStream<ChatStreamEvent, Error> {
+                          maxTokens: Int? = nil,
+                          enableThinking: Bool = false) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         let baseURL = config.getString(key: "llm.base_url")
         let apiKey = config.getString(key: "llm.api_key")
         let modelName = model ?? config.getString(key: "llm.model", default: "gpt-4o-mini")
@@ -296,7 +381,8 @@ class AutocompletionService {
             temperature: temperature ?? config.getDouble(key: "llm.temperature", default: 0.7),
             maxTokens: maxTokens ?? config.getInt(key: "llm.max_tokens", default: 1024),
             stream: true,
-            tools: tools
+            tools: tools,
+            enableThinking: enableThinking
         )
 
         return AsyncThrowingStream { continuation in
@@ -417,7 +503,8 @@ class AutocompletionService {
     func prompt(_ userMessage: String,
                 systemPrompt: String? = nil,
                 temperature: Double? = nil,
-                maxTokens: Int? = nil) async -> Result<String, Error> {
+                maxTokens: Int? = nil,
+                enableThinking: Bool = false) async -> Result<String, Error> {
         var messages: [ChatMessage] = []
 
         if let systemPrompt = systemPrompt {
@@ -429,7 +516,8 @@ class AutocompletionService {
         return await complete(
             messages: messages,
             temperature: temperature,
-            maxTokens: maxTokens
+            maxTokens: maxTokens,
+            enableThinking: enableThinking
         )
     }
 
@@ -437,7 +525,8 @@ class AutocompletionService {
     func promptStream(_ userMessage: String,
                      systemPrompt: String? = nil,
                      temperature: Double? = nil,
-                     maxTokens: Int? = nil) -> AsyncThrowingStream<String, Error> {
+                     maxTokens: Int? = nil,
+                     enableThinking: Bool = false) -> AsyncThrowingStream<String, Error> {
         var messages: [ChatMessage] = []
 
         if let systemPrompt = systemPrompt {
@@ -449,8 +538,25 @@ class AutocompletionService {
         return completeStream(
             messages: messages,
             temperature: temperature,
-            maxTokens: maxTokens
+            maxTokens: maxTokens,
+            enableThinking: enableThinking
         )
+    }
+
+    // MARK: - Helper Methods
+
+    /// Strip Qwen thinking content from response
+    /// Removes <think>...</think> tags and their content
+    private func stripThinkingContent(_ text: String) -> String {
+        // Pattern to match <think>...</think> with any content including newlines
+        let pattern = "<think>.*?</think>\\s*"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+            return text
+        }
+
+        let range = NSRange(text.startIndex..., in: text)
+        let result = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

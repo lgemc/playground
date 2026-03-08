@@ -415,10 +415,10 @@ struct ChatView: View {
             return "2B"
         case .llama3_2_3b_4bit:
             return "3B"
+        case .qwen3_5_4b_4bit:
+            return "4B"
         // case .llama3_2_3b_8bit:
         //     return "3B"
-        // case .qwen3_5_4b_6bit:
-        //     return "4B"
         // case .mistral_7b_4bit:
         //     return "7B"
         }
@@ -432,10 +432,10 @@ struct ChatView: View {
             return "Qwen3.5 2B (Balanced, ~1.6GB)"
         case .llama3_2_3b_4bit:
             return "Llama 3.2 3B-4bit (~1.85GB)"
+        case .qwen3_5_4b_4bit:
+            return "Qwen3 4B-4bit (~2.8GB)"
         // case .llama3_2_3b_8bit:
         //     return "Llama 3.2 3B-8bit (HQ, ~3.2GB)"
-        // case .qwen3_5_4b_6bit:
-        //     return "Qwen3.5 4B (Quality, ~2.8GB)"
         // case .mistral_7b_4bit:
         //     return "Mistral 7B (Best, ~4.5GB)"
         }

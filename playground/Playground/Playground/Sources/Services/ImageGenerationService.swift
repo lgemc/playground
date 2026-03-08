@@ -1,5 +1,4 @@
 import Foundation
-import Alamofire
 
 // PlatformImage is already defined in MLXImageService.swift
 #if canImport(UIKit)
@@ -8,18 +7,16 @@ import UIKit
 import AppKit
 #endif
 
-/// Service for generating images using both remote API and on-device MLX
-/// Supports automatic fallback: MLX (on-device) -> Remote API
+/// Service for generating images using on-device MLX Stable Diffusion
+/// Compatible with existing dependencies, optimized for Apple Silicon
 class ImageGenerationService {
     static let shared = ImageGenerationService()
     private let config = ConfigService.shared
-    private let mlxFlux = MLXFluxService.shared
+    private let stableDiffusion = MLXStableDiffusionService.shared
 
     // Config keys
-    private let configKeyUrl = "image_generation.api_url"
-    private let configKeyModel = "image_generation.model"
-    private let configKeyUseMLX = "image_generation.use_mlx"
-    private let configKeyMLXModel = "image_generation.mlx_model"
+    private let configKeyUseOnDevice = "image_generation.use_on_device"
+    private let configKeyApiUrl = "image_generation.api_url"
 
     private init() {
         initializeDefaults()
@@ -28,31 +25,25 @@ class ImageGenerationService {
     // MARK: - Configuration
 
     private func initializeDefaults() {
-        config.defineConfig(key: configKeyUrl, value: "")  // Optional remote API
-        config.defineConfig(key: configKeyModel, value: "flux-schnell")
-        config.defineConfig(key: configKeyUseMLX, value: "true")  // Enable MLX Flux
-        config.defineConfig(key: configKeyMLXModel, value: "flux-schnell")
+        config.defineConfig(key: configKeyUseOnDevice, value: "true")
+        config.defineConfig(key: configKeyApiUrl, value: "")
+    }
+
+    var useOnDevice: Bool {
+        (config.getConfig(key: configKeyUseOnDevice) ?? "true") == "true"
+    }
+
+    /// Always true since this service uses MLX Stable Diffusion
+    var useMLX: Bool {
+        return true
     }
 
     var apiUrl: String {
-        config.getConfig(key: configKeyUrl) ?? ""
-    }
-
-    var model: String {
-        config.getConfig(key: configKeyModel) ?? "flux-schnell"
-    }
-
-    var useMLX: Bool {
-        (config.getConfig(key: configKeyUseMLX) ?? "true") == "true"
-    }
-
-    var mlxModel: MLXModelConfig.FluxModel {
-        let modelName = config.getConfig(key: configKeyMLXModel) ?? "flux-schnell"
-        return MLXModelConfig.FluxModel(rawValue: modelName) ?? .fluxSchnell
+        config.getConfig(key: configKeyApiUrl) ?? ""
     }
 
     var isConfigured: Bool {
-        useMLX || !apiUrl.isEmpty
+        useOnDevice
     }
 
     // MARK: - Image Generation
@@ -60,172 +51,87 @@ class ImageGenerationService {
     /// Generate image from text prompt and save to file system
     /// - Parameters:
     ///   - prompt: Text description of the image
-    ///   - width: Image width (default: 1024)
-    ///   - height: Image height (default: 1024)
-    ///   - steps: Number of inference steps (default: model-specific)
-    ///   - guidanceScale: Guidance scale for generation
+    ///   - negativePrompt: What to avoid in the image
+    ///   - width: Image width (default: 512, optimized for iPhone)
+    ///   - height: Image height (default: 512, optimized for iPhone)
+    ///   - steps: Number of inference steps (default: 4 for SDXL Turbo)
+    ///   - guidanceScale: Guidance scale for generation (default: 0.0 for SDXL Turbo)
     ///   - seed: Random seed for reproducibility
     /// - Returns: URL of the saved image file
     func generateImage(
         prompt: String,
-        width: Int = 1024,
-        height: Int = 1024,
-        steps: Int? = nil,
-        guidanceScale: Double = 3.5,
+        negativePrompt: String? = nil,
+        width: Int = 512,
+        height: Int = 512,
+        steps: Int = 4,
+        guidanceScale: Double = 0.0,
         seed: Int? = nil
     ) async throws -> URL {
         guard isConfigured else {
             throw ImageGenerationError.notConfigured
         }
 
-        // Try MLX first if enabled
-        if useMLX {
-            do {
-                print("🎨 Generating image with MLX Flux")
-                print("   Model: \(mlxModel.rawValue)")
-                print("   Prompt: \(prompt.prefix(50))...")
-                print("   Size: \(width)x\(height)")
+        // Load model if not loaded
+        try await stableDiffusion.loadModel()
 
-                let image = try await mlxFlux.generate(
-                    prompt: prompt,
-                    model: mlxModel,
-                    width: width,
-                    height: height,
-                    steps: steps,
-                    guidanceScale: guidanceScale,
-                    seed: seed
-                )
+        print("🎨 Generating image with Core ML Stable Diffusion")
+        print("   Prompt: \(prompt.prefix(50))...")
+        print("   Size: \(width)x\(height)")
 
-                let fileURL = try saveImageToFile(
-                    image: image,
-                    prompt: prompt
-                )
-
-                print("✅ Image saved (MLX): \(fileURL.path)")
-                return fileURL
-            } catch {
-                print("⚠️ MLX Flux failed, falling back to remote API: \(error)")
-                // Fall through to remote API
-            }
-        }
-
-        // Fallback to remote API
-        if !apiUrl.isEmpty {
-            return try await generateImageViaAPI(
-                prompt: prompt,
-                width: width,
-                height: height,
-                steps: steps,
-                guidanceScale: guidanceScale,
-                seed: seed
-            )
-        }
-
-        throw ImageGenerationError.notConfigured
-    }
-
-    /// Generate image using remote API
-    private func generateImageViaAPI(
-        prompt: String,
-        width: Int,
-        height: Int,
-        steps: Int?,
-        guidanceScale: Double,
-        seed: Int?
-    ) async throws -> URL {
-        // Prepare request parameters
-        var parameters: [String: String] = [
-            "prompt": prompt,
-            "width": String(width),
-            "height": String(height),
-            "guidance_scale": String(guidanceScale)
-        ]
-
-        if let steps = steps {
-            parameters["steps"] = String(steps)
-        }
-
-        if let seed = seed {
-            parameters["seed"] = String(seed)
-        }
-
-        let url = "\(apiUrl)/v1/images/generations"
-
-        print("🎨 Generating image via API: \(prompt.prefix(50))...")
-        print("   API: \(url)")
-
-        // Make API request
-        return try await withCheckedThrowingContinuation { continuation in
-            AF.request(
-                url,
-                method: .post,
-                parameters: parameters,
-                encoding: URLEncoding.default
-            )
-            .validate()
-            .responseData { response in
-                switch response.result {
-                case .success(let imageData):
-                    do {
-                        // Convert data to image
-                        #if canImport(UIKit)
-                        guard let image = UIImage(data: imageData) else {
-                            throw ImageGenerationError.invalidImageData
-                        }
-                        #elseif canImport(AppKit)
-                        guard let image = NSImage(data: imageData) else {
-                            throw ImageGenerationError.invalidImageData
-                        }
-                        #endif
-
-                        // Save to file
-                        let fileURL = try self.saveImageToFile(
-                            image: image,
-                            prompt: prompt
-                        )
-
-                        print("✅ Image saved (API): \(fileURL.path)")
-                        continuation.resume(returning: fileURL)
-                    } catch {
-                        print("❌ Failed to save image: \(error)")
-                        continuation.resume(throwing: error)
-                    }
-
-                case .failure(let error):
-                    print("❌ API request failed: \(error)")
-                    if let data = response.data, let errorMessage = String(data: data, encoding: .utf8) {
-                        print("   Error response: \(errorMessage)")
-                    }
-                    continuation.resume(throwing: ImageGenerationError.apiRequestFailed(error))
-                }
-            }
-        }
-    }
-
-    /// Generate image with progress updates (MLX only)
-    func generateImageWithProgress(
-        prompt: String,
-        width: Int = 1024,
-        height: Int = 1024,
-        steps: Int? = nil,
-        guidanceScale: Double = 3.5,
-        seed: Int? = nil
-    ) -> AsyncThrowingStream<GenerationProgress, Error> {
-        guard useMLX else {
-            return AsyncThrowingStream { continuation in
-                continuation.finish(throwing: ImageGenerationError.progressNotSupported)
-            }
-        }
-
-        return mlxFlux.generateWithProgress(
+        let image = try await stableDiffusion.generate(
             prompt: prompt,
-            model: mlxModel,
+            negativePrompt: negativePrompt,
             width: width,
             height: height,
             steps: steps,
             guidanceScale: guidanceScale,
             seed: seed
         )
+
+        let fileURL = try saveImageToFile(
+            image: image,
+            prompt: prompt
+        )
+
+        print("✅ Image saved: \(fileURL.path)")
+        return fileURL
+    }
+
+    /// Generate image with progress updates
+    func generateImageWithProgress(
+        prompt: String,
+        negativePrompt: String? = nil,
+        width: Int = 512,
+        height: Int = 512,
+        steps: Int = 4,
+        guidanceScale: Double = 0.0,
+        seed: Int? = nil
+    ) -> AsyncThrowingStream<GenerationProgress, Error> {
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    // Load model if not loaded
+                    try await stableDiffusion.loadModel()
+
+                    // Stream progress
+                    for try await progress in stableDiffusion.generateWithProgress(
+                        prompt: prompt,
+                        negativePrompt: negativePrompt,
+                        width: width,
+                        height: height,
+                        steps: steps,
+                        guidanceScale: guidanceScale,
+                        seed: seed
+                    ) {
+                        continuation.yield(progress)
+                    }
+
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
     }
 
     // MARK: - File Management
@@ -340,9 +246,9 @@ class ImageGenerationService {
         return storageDirectory.appendingPathComponent(relativePath)
     }
 
-    /// Unload MLX model to free memory
+    /// Unload model to free memory
     func unloadModel() {
-        mlxFlux.unloadModel()
+        stableDiffusion.unloadModel()
     }
 }
 
@@ -350,23 +256,14 @@ class ImageGenerationService {
 
 enum ImageGenerationError: Error, LocalizedError {
     case notConfigured
-    case apiRequestFailed(Error)
-    case invalidImageData
     case imageEncodingFailed
-    case progressNotSupported
 
     var errorDescription: String? {
         switch self {
         case .notConfigured:
-            return "Image generation not configured. Enable MLX or configure API URL."
-        case .apiRequestFailed(let error):
-            return "API request failed: \(error.localizedDescription)"
-        case .invalidImageData:
-            return "Invalid image data received from API"
+            return "Image generation not configured. On-device generation is disabled."
         case .imageEncodingFailed:
             return "Failed to encode image as PNG"
-        case .progressNotSupported:
-            return "Progress tracking not supported for remote API generation"
         }
     }
 }

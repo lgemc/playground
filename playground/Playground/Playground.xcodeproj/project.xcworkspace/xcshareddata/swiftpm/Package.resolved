@@ -1,5 +1,5 @@
 {
-  "originHash" : "1ea5756b51d18942b42a84b7deb318014e2b3cab9b8934c21d8c48496b577e5c",
+  "originHash" : "088abdabdd6c2335797769dacd18100cacb6c40faa3b4d5dc9e0eae5daa9496d",
   "pins" : [
     {
       "identity" : "alamofire",
@@ -38,6 +38,15 @@
       }
     },
     {
+      "identity" : "gzipswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/1024jp/GzipSwift",
+      "state" : {
+        "revision" : "731037f6cc2be2ec01562f6597c1d0aa3fe6fd05",
+        "version" : "6.0.1"
+      }
+    },
+    {
       "identity" : "mlx-audio-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Blaizzy/mlx-audio-swift.git",
@@ -60,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift-lm",
       "state" : {
-        "revision" : "7e19e09027923d89ac47dd087d9627f610e5a91a",
-        "version" : "2.30.6"
+        "branch" : "main",
+        "revision" : "6bce33425917e943769887a4156a7207e346a64b"
       }
     },
     {
@@ -283,10 +292,10 @@
     {
       "identity" : "swift-transformers",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/huggingface/swift-transformers",
+      "location" : "https://github.com/huggingface/swift-transformers.git",
       "state" : {
-        "revision" : "f3d5cbfa653dd248ae8c92313453d5fdcfdf049e",
-        "version" : "1.1.8"
+        "revision" : "150169bfba0889c229a2ce7494cf8949f18e6906",
+        "version" : "1.1.9"
       }
     },
     {
