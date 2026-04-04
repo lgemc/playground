@@ -96,14 +96,6 @@ struct PlaygroundApp: App {
         AppRegistry.shared.register(FileSystemApp())
         AppRegistry.shared.register(QueuesApp())
         AppRegistry.shared.register(LogsApp())
-        AppRegistry.shared.register(ImageGenApp())
-
-        // Register tools for LLM
-        print("🛠️ Registering tools...")
-        // TODO: Re-implement GenerateImageTool with proper Swift 6 concurrency
-        // Task {
-        //     await ToolService.shared.register(GenerateImageTool.create())
-        // }
 
         print("✅ PlaygroundApp init completed")
     }

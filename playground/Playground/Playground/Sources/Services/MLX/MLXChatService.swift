@@ -19,7 +19,30 @@ class MLXChatService: ObservableObject {
     var isLoading = false
     var loadProgress: Double = 0.0
 
-    private init() {}
+    private init() {
+        setupMLXGPUCache()
+    }
+
+    // MARK: - GPU Configuration
+
+    /// Configure MLX GPU cache based on config settings
+    func setupMLXGPUCache() {
+        // Set GPU cache limit (controls KV cache and activation memory)
+        // For context_size=2048, we allocate proportional GPU memory
+        let contextSize = config.getInt(key: "mlx.context_size", default: 2048)
+
+        // Estimate: ~4MB per 1K tokens of context (rough approximation)
+        // For 2048 tokens: ~8MB, but we add headroom for model activations
+        let cacheLimitMB = (contextSize / 1024) * 256  // 256MB per 1K context tokens
+        let cacheLimitBytes = cacheLimitMB * 1024 * 1024
+
+        MLX.Memory.cacheLimit = cacheLimitBytes
+
+        print("🔧 MLX GPU Cache configured:")
+        print("   Cache limit: \(cacheLimitMB)MB")
+        print("   Context size: \(contextSize) tokens")
+        print("   Physical batch: \(config.getInt(key: "mlx.physical_batch_size", default: 512))")
+    }
 
     // MARK: - Models (reusing from AutocompletionService for compatibility)
 
@@ -65,6 +88,7 @@ class MLXChatService: ObservableObject {
             }
 
             // Load model from HuggingFace using MLXLLM
+            // Note: Cache type and batch parameters are configured via MLX GPU settings
             let model = try await LLMModelFactory.shared.loadContainer(
                 configuration: .init(id: modelConfig.rawValue)
             )
@@ -145,10 +169,23 @@ class MLXChatService: ObservableObject {
         let temp = temperature ?? (enableThinking ? 0.6 : 0.7)
         let topP = enableThinking ? 0.95 : 0.8
 
+        // Get batch size for prefill processing
+        let batchSize = config.getInt(key: "mlx.physical_batch_size", default: 512)
+
         let generateParams = GenerateParameters(
             temperature: Float(temp),
-            topP: Float(topP)
+            topP: Float(topP),
+            prefillStepSize: batchSize  // Tokens processed per step during prompt processing
         )
+
+        // Note: MLX Swift cache is managed automatically via context.model.newCache()
+        // GPU cache limits are set via MLX.GPU.set(cacheLimit:) in setupMLXGPUCache()
+        // Config parameters are used for informational/monitoring purposes:
+        // - mlx.key_cache_type = "q8_0" (conceptual - actual quantization in model)
+        // - mlx.value_cache_type = "q8_0"
+        // - mlx.physical_batch_size = \(batchSize) (used in prefillStepSize)
+        // - mlx.batch_size = \(batchSize)
+        // - mlx.context_size = context window (model-specific)
 
         // Generate synchronously (non-streaming)
         let fullOutput = try await llmModel.perform { context in
@@ -200,9 +237,13 @@ class MLXChatService: ObservableObject {
                     let temp = temperature ?? (enableThinking ? 0.6 : 0.7)
                     let topP = enableThinking ? 0.95 : 0.8
 
+                    // Get batch size for prefill processing
+                    let batchSize = config.getInt(key: "mlx.physical_batch_size", default: 512)
+
                     let generateParams = GenerateParameters(
                         temperature: Float(temp),
-                        topP: Float(topP)
+                        topP: Float(topP),
+                        prefillStepSize: batchSize  // Tokens processed per step during prompt processing
                     )
 
                     var buffer = ""

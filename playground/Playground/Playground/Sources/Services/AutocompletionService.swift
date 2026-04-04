@@ -191,7 +191,13 @@ class AutocompletionService {
                   maxTokens: Int? = nil,
                   enableThinking: Bool = false) async -> Result<String, Error> {
         return await Result.catching {
-            let baseURL = self.config.getString(key: "llm.base_url")
+            var baseURL = self.config.getString(key: "llm.base_url")
+            // Fix malformed URLs (remove spaces)
+            baseURL = baseURL.replacingOccurrences(of: " ", with: "")
+            if baseURL.isEmpty {
+                baseURL = "https://api.openai.com/v1"
+            }
+
             let apiKey = self.config.getString(key: "llm.api_key")
             let modelName = model ?? self.config.getString(key: "llm.model", default: "gpt-4o-mini")
 
@@ -239,7 +245,13 @@ class AutocompletionService {
                        temperature: Double? = nil,
                        maxTokens: Int? = nil,
                        enableThinking: Bool = false) -> AsyncThrowingStream<String, Error> {
-        let baseURL = config.getString(key: "llm.base_url")
+        var baseURL = config.getString(key: "llm.base_url")
+        // Fix malformed URLs (remove spaces)
+        baseURL = baseURL.replacingOccurrences(of: " ", with: "")
+        if baseURL.isEmpty {
+            baseURL = "https://api.openai.com/v1"
+        }
+
         let apiKey = config.getString(key: "llm.api_key")
         let modelName = model ?? config.getString(key: "llm.model", default: "gpt-4o-mini")
 
@@ -371,7 +383,13 @@ class AutocompletionService {
                           temperature: Double? = nil,
                           maxTokens: Int? = nil,
                           enableThinking: Bool = false) -> AsyncThrowingStream<ChatStreamEvent, Error> {
-        let baseURL = config.getString(key: "llm.base_url")
+        var baseURL = config.getString(key: "llm.base_url")
+        // Fix malformed URLs (remove spaces)
+        baseURL = baseURL.replacingOccurrences(of: " ", with: "")
+        if baseURL.isEmpty {
+            baseURL = "https://api.openai.com/v1"
+        }
+
         let apiKey = config.getString(key: "llm.api_key")
         let modelName = model ?? config.getString(key: "llm.model", default: "gpt-4o-mini")
 

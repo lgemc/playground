@@ -126,51 +126,71 @@ struct MarkdownText: View {
 
         return VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                let lineStr = String(line)
+                let trimmedLine = lineStr.trimmingCharacters(in: .whitespaces)
+
+                // Detect indentation level (for sub-points)
+                let leadingSpaces = lineStr.prefix(while: { $0 == " " }).count
+                let indentLevel = leadingSpaces / 2  // 2 spaces = 1 indent level
 
                 // Headings: # H1, ## H2, ### H3, etc.
                 if trimmedLine.hasPrefix("#") {
-                    if let headingData = parseHeading(String(line)) {
+                    if let headingData = parseHeading(lineStr) {
                         parseInlineText(headingData.text, textColor: textColor)
                             .font(headingData.font)
                             .bold()
                             .padding(.top, headingData.level == 1 ? 8 : 4)
                             .padding(.bottom, 2)
                     } else {
-                        parseInlineText(String(line), textColor: textColor)
+                        parseInlineText(lineStr, textColor: textColor)
                     }
                 } else if trimmedLine.hasPrefix("- ") || trimmedLine.hasPrefix("* ") || trimmedLine.hasPrefix("+ ") {
-                    // Bullet list
+                    // Bullet list (with indentation support for sub-points)
                     HStack(alignment: .top, spacing: 6) {
-                        Text("•")
+                        // Add indentation for sub-points
+                        if indentLevel > 0 {
+                            Spacer()
+                                .frame(width: CGFloat(indentLevel * 20))
+                        }
+                        Text(indentLevel > 0 ? "◦" : "•")  // Hollow bullet for sub-items
                             .foregroundColor(textColor)
-                        parseInlineText(String(line.dropFirst(2)), textColor: textColor)
+                        parseInlineText(String(trimmedLine.dropFirst(2)), textColor: textColor)
+                        Spacer()  // Push content to leading edge
                     }
                 } else if let numberMatch = trimmedLine.firstMatch(of: /^(\d+)\.\s+(.*)/) {
-                    // Numbered list
+                    // Numbered list (with indentation support)
                     HStack(alignment: .top, spacing: 6) {
+                        // Add indentation for sub-points
+                        if indentLevel > 0 {
+                            Spacer()
+                                .frame(width: CGFloat(indentLevel * 20))
+                        }
                         Text("\(numberMatch.1).")
                             .foregroundColor(textColor)
                         parseInlineText(String(numberMatch.2), textColor: textColor)
+                        Spacer()
                     }
                 } else {
-                    parseInlineText(String(line), textColor: textColor)
+                    parseInlineText(lineStr, textColor: textColor)
                 }
             }
         }
     }
 
     private static func parseInlineText(_ text: String, textColor: Color) -> Text {
+        // Pre-process text: convert -- to em-dash (—)
+        let processedText = text.replacingOccurrences(of: "--", with: "—")
+
         var result = Text("")
         var currentText = ""
-        var index = text.startIndex
+        var index = processedText.startIndex
 
-        while index < text.endIndex {
-            let char = text[index]
+        while index < processedText.endIndex {
+            let char = processedText[index]
 
             // Check for markdown patterns
             if char == "*" || char == "_" {
-                let remaining = String(text[index...])
+                let remaining = String(processedText[index...])
 
                 // Bold: **text** or __text__
                 if remaining.hasPrefix("**") || remaining.hasPrefix("__") {
@@ -181,7 +201,7 @@ struct MarkdownText: View {
                         }
                         let boldText = String(remaining[remaining.index(remaining.startIndex, offsetBy: 2)..<endRange])
                         result = result + Text(boldText).bold().foregroundColor(textColor)
-                        index = text.index(index, offsetBy: boldText.count + 4)
+                        index = processedText.index(index, offsetBy: boldText.count + 4)
                         continue
                     }
                 }
@@ -193,13 +213,13 @@ struct MarkdownText: View {
                     }
                     let italicText = String(remaining[remaining.index(remaining.startIndex, offsetBy: 1)..<endRange])
                     result = result + Text(italicText).italic().foregroundColor(textColor)
-                    index = text.index(index, offsetBy: italicText.count + 2)
+                    index = processedText.index(index, offsetBy: italicText.count + 2)
                     continue
                 }
             }
             // Inline code: `text`
             else if char == "`" {
-                let remaining = String(text[index...])
+                let remaining = String(processedText[index...])
                 if let endRange = findClosingPattern(in: remaining, pattern: "`", startOffset: 1) {
                     if !currentText.isEmpty {
                         result = result + Text(currentText).foregroundColor(textColor)
@@ -209,13 +229,13 @@ struct MarkdownText: View {
                     result = result + Text(codeText)
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(.secondary)
-                    index = text.index(index, offsetBy: codeText.count + 2)
+                    index = processedText.index(index, offsetBy: codeText.count + 2)
                     continue
                 }
             }
             // Links: [text](url)
             else if char == "[" {
-                if let linkData = parseLink(from: String(text[index...])) {
+                if let linkData = parseLink(from: String(processedText[index...])) {
                     if !currentText.isEmpty {
                         result = result + Text(currentText).foregroundColor(textColor)
                         currentText = ""
@@ -223,13 +243,13 @@ struct MarkdownText: View {
                     result = result + Text(linkData.text)
                         .foregroundColor(.blue)
                         .underline()
-                    index = text.index(index, offsetBy: linkData.totalLength)
+                    index = processedText.index(index, offsetBy: linkData.totalLength)
                     continue
                 }
             }
 
             currentText.append(char)
-            index = text.index(after: index)
+            index = processedText.index(after: index)
         }
 
         if !currentText.isEmpty {
