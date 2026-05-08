@@ -80,22 +80,15 @@ struct PlaygroundApp: App {
         print("⚙️ Initializing ConfigService...")
         _ = ConfigService.shared
 
-        print("🚌 Initializing AppBus...")
-        _ = AppBus.shared
-
-        print("📋 Initializing QueueService...")
-        QueueService.shared.initialize()
-
-        print("📝 Initializing DerivativeService...")
-        DerivativeService.shared.initialize()
+        print("🤖 Initializing ModelRegistry...")
+        Task {
+            await ModelRegistryInitializer.shared.initializeModels()
+        }
 
         // Register sub-apps
         print("📱 Registering sub-apps...")
-        AppRegistry.shared.register(ChatApp())
-        AppRegistry.shared.register(VocabularyApp())
-        AppRegistry.shared.register(FileSystemApp())
-        AppRegistry.shared.register(QueuesApp())
-        AppRegistry.shared.register(LogsApp())
+        AppRegistry.shared.register(ConversionApp())
+        AppRegistry.shared.register(SettingsApp())
 
         print("✅ PlaygroundApp init completed")
     }

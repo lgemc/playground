@@ -300,6 +300,29 @@ class PlaygroundDatabase {
             print("✅ Created derivatives table")
         }
 
+        // Migration v9: Conversions table
+        migrator.registerMigration("v9_conversions") { db in
+            print("🔄 Creating conversions table...")
+
+            try db.create(table: "conversions") { t in
+                t.column("id", .text).primaryKey()
+                t.column("type", .text).notNull().indexed()
+                t.column("input_text", .text)
+                t.column("input_file_id", .text)
+                t.column("output_text", .text)
+                t.column("output_file_id", .text)
+                t.column("metadata", .text) // JSON
+                t.column("created_at", .datetime).notNull().indexed()
+                t.column("updated_at", .datetime).notNull()
+            }
+
+            // Create indices for efficient queries
+            try db.create(index: "idx_conversions_type", on: "conversions", columns: ["type"])
+            try db.create(index: "idx_conversions_created_at", on: "conversions", columns: ["created_at"])
+
+            print("✅ Created conversions table")
+        }
+
         try migrator.migrate(queue)
     }
 
