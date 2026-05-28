@@ -291,3 +291,81 @@ String _extractAnswer(String response) {
 **Reference Implementations**:
 - **File titles**: `lib/services/auto_title_service.dart` - extracts from end of reasoning output
 - **Vocabulary definitions**: `lib/apps/vocabulary/services/vocabulary_definition_service.dart` - uses `MEANING:` marker
+
+## iOS Native Implementation
+
+### TextField Freezing Issue in Chat Views
+
+**Problem**: SwiftUI TextField components in chat interfaces can freeze or become unresponsive when tapped, particularly when combined with ScrollView and keyboard interactions.
+
+**Location**: `Playground/Playground/Sources/Apps/Chat/ChatView.swift`
+
+**Root Causes**:
+1. **Keyboard Avoidance Conflicts**: SwiftUI's automatic keyboard avoidance can conflict with ScrollView layout calculations
+2. **Focus Management Issues**: TextField focus state changes can trigger excessive layout recalculations
+3. **Layout Calculation Loops**: Combination of LazyVStack inside ScrollView with TextField can cause layout loops
+4. **Missing ContentShape**: ScrollView tap handling can interfere with TextField interaction without explicit content shape
+
+**Solutions Applied**:
+
+1. **Add @FocusState for Explicit Focus Management**:
+   ```swift
+   @FocusState private var isInputFocused: Bool
+   ```
+   This allows programmatic control of keyboard presentation and dismissal.
+
+2. **Apply .focused() Modifier to TextField**:
+   ```swift
+   TextField("Message", text: $inputText, axis: .vertical)
+       .focused($isInputFocused)
+       .submitLabel(.return)
+       .autocorrectionDisabled(false)
+   ```
+
+3. **Dismiss Keyboard When Sending Messages**:
+   ```swift
+   private func sendMessage() {
+       // ... existing code ...
+       isInputFocused = false  // Prevent layout issues during message send
+   }
+   ```
+
+4. **Add Fixed Frame to Input Area**:
+   ```swift
+   HStack(spacing: 12) {
+       // TextField and Button
+   }
+   .padding()
+   .frame(minHeight: 60)
+   .background(Color(.systemBackground))
+   ```
+   This prevents layout shifts when keyboard appears/disappears.
+
+5. **Add ContentShape to ScrollView**:
+   ```swift
+   ScrollView {
+       // ... content ...
+   }
+   .contentShape(Rectangle())
+   ```
+   Improves tap handling and prevents ScrollView from intercepting TextField taps.
+
+6. **Add Tap Gesture to Dismiss Keyboard**:
+   ```swift
+   .onTapGesture {
+       isInputFocused = false
+   }
+   ```
+   Allows users to dismiss keyboard by tapping message area.
+
+**Testing**:
+- Test on both iOS Simulator and physical devices (simulator-specific bugs are common)
+- If freezing persists in Simulator: try "Erase All Content and Settings" or restart simulator
+- Clean build folder (Shift + Command + K) if issue persists
+
+**Additional Resources**:
+- SwiftUI TextField freezing is a known issue particularly in iOS 13-14 (mostly resolved in iOS 15+)
+- Consider using `.ignoresSafeArea(.keyboard)` if custom keyboard handling is needed
+- For advanced cases, implement custom ViewModifier with Combine for keyboard notifications
+
+**Reference**: See commit implementing these fixes in `ChatView.swift` for complete implementation details.

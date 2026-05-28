@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 import UniformTypeIdentifiers
 
 /// Folder picker view - allows browsing and selecting folders using UIDocumentPickerViewController

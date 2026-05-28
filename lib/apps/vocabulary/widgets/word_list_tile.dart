@@ -2,10 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/app_bus.dart';
+import '../../../core/app_event.dart';
 import '../../../services/share_content.dart';
 import '../../../widgets/share_button.dart';
 import '../models/word.dart';
 import '../services/vocabulary_streaming_service.dart';
+import '../services/vocabulary_storage.dart';
 
 class WordListTile extends StatefulWidget {
   final Word word;
@@ -73,6 +76,28 @@ class _WordListTileState extends State<WordListTile> {
     }
 
     return '${date.day}/${date.month}/${date.year}';
+  }
+
+  Future<void> _generateDefinition() async {
+    // Emit event to trigger definition generation
+    await AppBus.instance.emit(AppEvent.create(
+      type: 'vocabulary.update',
+      appId: 'vocabulary',
+      metadata: {
+        'wordId': widget.word.id,
+        'word': widget.word.word,
+        'wordChanged': true, // Force definition generation
+      },
+    ));
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Generating definition...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   @override
@@ -192,6 +217,17 @@ class _WordListTileState extends State<WordListTile> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Show "Generate" button if word has no meaning and is not generating
+            if (!hasMeaning && !isGenerating)
+              TextButton.icon(
+                onPressed: _generateDefinition,
+                icon: const Icon(Icons.auto_awesome, size: 16),
+                label: const Text('Generate'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+              ),
             ShareButton(
               content: ShareContent.text(
                 sourceAppId: 'vocabulary',

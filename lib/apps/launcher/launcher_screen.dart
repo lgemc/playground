@@ -12,6 +12,16 @@ class LauncherScreen extends StatelessWidget {
     final appDefinitions = AppRegistry.instance.appDefinitions;
 
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('Playground'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Search',
+            onPressed: () => _launchSearch(context),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
@@ -24,6 +34,10 @@ class LauncherScreen extends StatelessWidget {
         child: const Icon(Icons.sync),
       ),
     );
+  }
+
+  void _launchSearch(BuildContext context) {
+    AppRegistry.instance.launchApp('search');
   }
 
   void _showGlobalSync(BuildContext context) {
