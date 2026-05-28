@@ -3,7 +3,10 @@ import SwiftUI
 /// Main view displaying conversion history as cards
 struct ConversionHistoryView: View {
     @State private var conversions: [Conversion] = []
+    @State private var filteredConversions: [Conversion] = []
+    @State private var searchText = ""
     @State private var showingInput = false
+    @State private var showingSettings = false
     @State private var isLoading = true
 
     private let conversionService = ConversionService.shared
@@ -21,11 +24,39 @@ struct ConversionHistoryView: View {
             // Floating Action Button
             addButton
         }
+        .navigationTitle("AI Conversions")
+        .navigationBarTitleDisplayMode(.large)
+        .searchable(text: $searchText, prompt: "Search conversions...")
+        .onChange(of: searchText) { oldValue, newValue in
+            filterConversions()
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gear")
+                }
+            }
+        }
         .onAppear {
             loadConversions()
         }
-        .sheet(isPresented: $showingInput) {
-            ConversionInputView(conversions: $conversions)
+        .sheet(isPresented: $showingInput, onDismiss: {
+            // Reload from storage to ensure we have the latest persisted data
+            // Small delay to ensure async storage write completes
+            print("🔄 Sheet dismissed, reloading conversions...")
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                loadConversions()
+            }
+        }) {
+            ConversionInputView()
+        }
+        .sheet(isPresented: $showingSettings) {
+            NavigationStack {
+                SettingsView()
+            }
         }
     }
 
@@ -62,17 +93,24 @@ struct ConversionHistoryView: View {
 
     @ViewBuilder
     private var conversionsListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                ForEach(conversions) { conversion in
-                    ConversionCard(conversion: conversion)
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                deleteConversion(conversion)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+        List {
+            ForEach(filteredConversions) { conversion in
+                if let chatId = conversion.metadata["chat_id"] {
+                    NavigationLink(value: chatId) {
+                        ConversionCard(conversion: conversion)
+                    }
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .onAppear {
+                        // Auto-refresh if conversion is still processing
+                        if conversion.outputText == nil && conversion.outputFileId == nil {
+                            scheduleRefresh(for: conversion)
                         }
+                    }
+                } else {
+                    ConversionCard(conversion: conversion)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowSeparator(.hidden)
                         .onAppear {
                             // Auto-refresh if conversion is still processing
                             if conversion.outputText == nil && conversion.outputFileId == nil {
@@ -81,11 +119,23 @@ struct ConversionHistoryView: View {
                         }
                 }
             }
-            .padding()
-            .padding(.bottom, 80) // Space for FAB
+            .onDelete { indexSet in
+                for index in indexSet {
+                    deleteConversion(filteredConversions[index])
+                }
+            }
+
+            // Spacer for FAB
+            Color.clear
+                .frame(height: 80)
+                .listRowSeparator(.hidden)
         }
+        .listStyle(.plain)
         .refreshable {
             loadConversions()
+        }
+        .navigationDestination(for: String.self) { chatId in
+            ChatView(chatId: chatId)
         }
     }
 
@@ -107,8 +157,36 @@ struct ConversionHistoryView: View {
     // MARK: - Data Management
 
     private func loadConversions() {
-        conversions = conversionService.getAllConversions()
+        let loaded = conversionService.getAllConversions()
+        print("📋 Loaded \(loaded.count) conversions from storage")
+        for conv in loaded.prefix(5) {
+            print("  - \(conv.type.displayName): \(conv.id)")
+        }
+        conversions = loaded
+        filterConversions()
         isLoading = false
+    }
+
+    private func filterConversions() {
+        if searchText.isEmpty {
+            filteredConversions = conversions
+        } else {
+            filteredConversions = conversions.filter { conversion in
+                // Search in input text
+                if let input = conversion.inputText, input.localizedCaseInsensitiveContains(searchText) {
+                    return true
+                }
+                // Search in output text
+                if let output = conversion.outputText, output.localizedCaseInsensitiveContains(searchText) {
+                    return true
+                }
+                // Search in type
+                if conversion.type.displayName.localizedCaseInsensitiveContains(searchText) {
+                    return true
+                }
+                return false
+            }
+        }
     }
 
     private func deleteConversion(_ conversion: Conversion) {

@@ -8,6 +8,7 @@ class ConversionService {
 
     private let storage = ConversionStorage.shared
     private let fileStorage = FileStorage.shared
+    private let chatStorage = ChatStorage.shared
     private let mlx = MLXService.shared
     private let flux = MLXFluxService.shared
     private let fileExtraction = FileExtractionService.shared
@@ -52,7 +53,7 @@ class ConversionService {
             } catch {
                 print("❌ Conversion failed: \(error)")
                 // Update with error in metadata
-                _ = storage.updateConversion(
+                try? updateConversionStorage(
                     id: conversion.id,
                     metadata: ["error": error.localizedDescription]
                 )
@@ -137,6 +138,52 @@ class ConversionService {
 
         let duration = Date().timeIntervalSince(startTime)
         print("✅ Conversion completed in \(String(format: "%.2f", duration))s")
+
+        // Create chat for conversions with text output
+        try await createChatIfNeeded(for: conversion, duration: duration)
+    }
+
+    /// Create a chat from any conversion that has text input/output
+    private func createChatIfNeeded(for conversion: Conversion, duration: Double) async throws {
+        // Get the updated conversion from storage
+        guard let updated = getConversion(id: conversion.id),
+              let outputText = updated.outputText,
+              !outputText.isEmpty else {
+            return
+        }
+
+        // Create chat title from input or conversion type
+        let title: String
+        if let inputText = updated.inputText, !inputText.isEmpty {
+            title = String(inputText.prefix(50))
+        } else {
+            title = "\(updated.type.displayName) - \(updated.formattedTime)"
+        }
+
+        let chatResult = chatStorage.createChat(title: title)
+        guard case .ok(let chat) = chatResult else {
+            return
+        }
+
+        // Add user message if there's input text
+        if let inputText = updated.inputText, !inputText.isEmpty {
+            _ = chatStorage.createMessage(chatId: chat.id, role: .user, content: inputText)
+        }
+
+        // Add assistant message with output
+        _ = chatStorage.createMessage(chatId: chat.id, role: .assistant, content: outputText)
+
+        // Update conversion metadata with chat ID
+        var metadata = updated.metadata
+        metadata["chat_id"] = chat.id
+        metadata["duration"] = String(format: "%.2f", duration)
+
+        try updateConversionStorage(
+            id: updated.id,
+            metadata: metadata
+        )
+
+        print("✅ Created chat \(chat.id) from \(updated.type.displayName) conversion")
     }
 
     private func performStreamingConversion(
@@ -167,13 +214,36 @@ class ConversionService {
             "duration": String(format: "%.2f", duration)
         ]
 
-        _ = storage.updateConversion(
+        // Create a chat from this conversion
+        var chatId: String? = nil
+        if let inputText = conversion.inputText {
+            let chatResult = chatStorage.createChat(title: String(inputText.prefix(50)))
+            if case .ok(let chat) = chatResult {
+                chatId = chat.id
+
+                // Add user message
+                _ = chatStorage.createMessage(chatId: chat.id, role: .user, content: inputText)
+
+                // Add assistant response
+                _ = chatStorage.createMessage(chatId: chat.id, role: .assistant, content: accumulatedText)
+
+                print("✅ Created chat \(chat.id) from conversion")
+            }
+        }
+
+        // Update metadata with chat ID and duration
+        var finalMetadata = metadata
+        if let chatId = chatId {
+            finalMetadata["chat_id"] = chatId
+        }
+
+        try updateConversionStorage(
             id: conversion.id,
             outputText: accumulatedText,
-            metadata: metadata
+            metadata: finalMetadata
         )
 
-        continuation.yield(.completed(accumulatedText))
+        continuation.yield(.completed(accumulatedText, chatId: chatId))
     }
 
     // MARK: - Conversion Type Implementations
@@ -185,7 +255,7 @@ class ConversionService {
 
         let output = try await mlx.prompt(inputText)
 
-        _ = storage.updateConversion(
+        try updateConversionStorage(
             id: conversion.id,
             outputText: output,
             metadata: ["model": "mlx"]
@@ -223,7 +293,7 @@ class ConversionService {
             mimeType: "image/png"
         )
 
-        _ = storage.updateConversion(
+        try updateConversionStorage(
             id: conversion.id,
             outputFileId: outputFileId,
             metadata: ["model": "flux"]
@@ -245,7 +315,7 @@ class ConversionService {
         // For now, return placeholder
         let output = "Image description: [Vision model not yet implemented]"
 
-        _ = storage.updateConversion(
+        try updateConversionStorage(
             id: conversion.id,
             outputText: output,
             metadata: ["model": "placeholder"]
@@ -267,7 +337,7 @@ class ConversionService {
             mimeType: "audio/m4a"
         )
 
-        _ = storage.updateConversion(
+        try updateConversionStorage(
             id: conversion.id,
             outputFileId: outputFileId,
             metadata: ["model": "mlx_tts"]
@@ -288,7 +358,7 @@ class ConversionService {
         // Transcribe with Whisper
         let response = try await mlx.whisper.transcribe(audioURL: URL(fileURLWithPath: file.absolutePath))
 
-        _ = storage.updateConversion(
+        try updateConversionStorage(
             id: conversion.id,
             outputText: response.text,
             metadata: ["model": "mlx_whisper"]
@@ -309,7 +379,7 @@ class ConversionService {
         // Transcribe video with Whisper
         let response = try await mlx.whisper.transcribe(audioURL: URL(fileURLWithPath: file.absolutePath))
 
-        _ = storage.updateConversion(
+        try updateConversionStorage(
             id: conversion.id,
             outputText: response.text,
             metadata: ["model": "mlx_whisper"]
@@ -336,17 +406,54 @@ class ConversionService {
 
         let summary = try await mlx.prompt(userPrompt, systemPrompt: systemPrompt)
 
-        _ = storage.updateConversion(
+        try updateConversionStorage(
             id: conversion.id,
             outputText: summary,
             metadata: ["model": "mlx", "extracted_length": String(extractedText.count)]
         )
     }
 
+    // MARK: - Storage Helpers
+
+    private func updateConversionStorage(
+        id: String,
+        outputText: String? = nil,
+        outputFileId: String? = nil,
+        metadata: [String: String]? = nil
+    ) throws {
+        let result = storage.updateConversion(
+            id: id,
+            outputText: outputText,
+            outputFileId: outputFileId,
+            metadata: metadata
+        )
+
+        if case .err(let error) = result {
+            print("❌ Failed to update conversion \(id) in storage: \(error)")
+            throw ConversionError.storageFailed(error)
+        }
+
+        print("✅ Conversion \(id) updated in storage")
+    }
+
     // MARK: - File Management
 
     private func importFile(url: URL) async throws -> String {
         let filename = url.lastPathComponent
+
+        // Request security-scoped access for files from file picker
+        let accessGranted = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessGranted {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        guard accessGranted else {
+            print("❌ Failed to access security-scoped resource: \(url.path)")
+            throw ConversionError.fileAccessDenied
+        }
+
         let data = try Data(contentsOf: url)
 
         return try await saveGeneratedFile(
@@ -361,28 +468,34 @@ class ConversionService {
         filename: String,
         mimeType: String
     ) async throws -> String {
-        // Write to conversions directory
+        // Write to file_system/storage directory (where FileStorage expects files)
         let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let conversionDir = documentsURL
+        let storageDir = documentsURL
             .appendingPathComponent("data", isDirectory: true)
+            .appendingPathComponent("file_system", isDirectory: true)
+            .appendingPathComponent("storage", isDirectory: true)
             .appendingPathComponent("conversions", isDirectory: true)
-            .appendingPathComponent("files", isDirectory: true)
 
-        try FileManager.default.createDirectory(at: conversionDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: storageDir, withIntermediateDirectories: true)
 
-        let fileURL = conversionDir.appendingPathComponent(filename)
+        let fileURL = storageDir.appendingPathComponent(filename)
         try data.write(to: fileURL)
 
-        // Create file record
+        // Use relative path for FileStorage (relative to storage/)
+        let relativePath = "conversions/\(filename)"
+
+        // Create file record with relative path
         let result = fileStorage.createFile(
             name: filename,
-            path: fileURL.path,
+            path: relativePath,
             mimeType: mimeType,
             sizeBytes: Int64(data.count)
         )
 
         switch result {
         case .ok(let file):
+            print("✅ Saved file: \(filename) at relative path: \(relativePath)")
+            print("   Absolute path: \(file.absolutePath)")
             return file.id
         case .err(let error):
             throw ConversionError.storageFailed(error)
@@ -398,7 +511,14 @@ class ConversionService {
 
     func getAllConversions() -> [Conversion] {
         let result = storage.getAllConversions()
-        return (try? result.get()) ?? []
+        switch result {
+        case .ok(let conversions):
+            print("✅ ConversionService.getAllConversions: Found \(conversions.count) conversions")
+            return conversions
+        case .err(let error):
+            print("❌ ConversionService.getAllConversions failed: \(error)")
+            return []
+        }
     }
 
     func deleteConversion(id: String) throws {
@@ -418,13 +538,14 @@ enum ConversionStreamEvent {
     case conversionCreated(Conversion)
     case textChunk(String)
     case progress(Double)
-    case completed(String)
+    case completed(String, chatId: String?)
 }
 
 enum ConversionError: LocalizedError {
     case missingInput
     case storageFailed(Error)
     case fileNotFound
+    case fileAccessDenied
     case imageConversionFailed
     case streamingNotSupported(ConversionType)
 
@@ -436,6 +557,8 @@ enum ConversionError: LocalizedError {
             return "Storage failed: \(error.localizedDescription)"
         case .fileNotFound:
             return "Input file not found"
+        case .fileAccessDenied:
+            return "Cannot access the selected file. Please try selecting it again."
         case .imageConversionFailed:
             return "Failed to convert image data"
         case .streamingNotSupported(let type):

@@ -74,9 +74,6 @@ struct PlaygroundApp: App {
         print("📦 Initializing AppRegistry...")
         _ = AppRegistry.shared
 
-        print("🎮 Initializing AppRuntimeManager...")
-        _ = AppRuntimeManager.shared
-
         print("⚙️ Initializing ConfigService...")
         _ = ConfigService.shared
 

@@ -38,9 +38,6 @@ struct Conversion: Codable, Identifiable {
 extension Conversion: FetchableRecord, PersistableRecord {
     static let databaseTableName = "conversions"
 
-    static let databaseColumnEncodingStrategy = DatabaseColumnEncodingStrategy.convertToSnakeCase
-    static let databaseColumnDecodingStrategy = DatabaseColumnDecodingStrategy.convertFromSnakeCase
-
     enum Columns {
         static let id = Column("id")
         static let type = Column("type")
@@ -53,49 +50,67 @@ extension Conversion: FetchableRecord, PersistableRecord {
         static let updatedAt = Column("updated_at")
     }
 
-    // Custom encoding/decoding for metadata dictionary
-    enum CodingKeys: String, CodingKey {
-        case id, type, inputText = "input_text", inputFileId = "input_file_id"
-        case outputText = "output_text", outputFileId = "output_file_id"
-        case metadata, createdAt = "created_at", updatedAt = "updated_at"
+    // Custom decoding/encoding for metadata
+    static func databaseJSONDecoder(for column: String) -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        type = try container.decode(ConversionType.self, forKey: .type)
-        inputText = try container.decodeIfPresent(String.self, forKey: .inputText)
-        inputFileId = try container.decodeIfPresent(String.self, forKey: .inputFileId)
-        outputText = try container.decodeIfPresent(String.self, forKey: .outputText)
-        outputFileId = try container.decodeIfPresent(String.self, forKey: .outputFileId)
-        createdAt = try container.decode(Date.self, forKey: .createdAt)
-        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    static func databaseJSONEncoder(for column: String) -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
 
-        // Decode metadata as JSON string
-        if let metadataString = try container.decodeIfPresent(String.self, forKey: .metadata),
+    func encode(to container: inout PersistenceContainer) throws {
+        container["id"] = id
+        container["type"] = type.rawValue
+        container["input_text"] = inputText
+        container["input_file_id"] = inputFileId
+        container["output_text"] = outputText
+        container["output_file_id"] = outputFileId
+        container["created_at"] = createdAt
+        container["updated_at"] = updatedAt
+
+        // Encode metadata as JSON string
+        if let metadataData = try? JSONEncoder().encode(metadata),
+           let metadataString = String(data: metadataData, encoding: .utf8) {
+            container["metadata"] = metadataString
+        } else {
+            container["metadata"] = "{}"
+        }
+    }
+
+    init(row: Row) throws {
+        id = row["id"]
+
+        // Decode enum from string
+        let typeString: String = row["type"]
+        guard let decodedType = ConversionType(rawValue: typeString) else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: [],
+                    debugDescription: "Invalid conversion type: \(typeString)"
+                )
+            )
+        }
+        type = decodedType
+
+        inputText = row["input_text"]
+        inputFileId = row["input_file_id"]
+        outputText = row["output_text"]
+        outputFileId = row["output_file_id"]
+        createdAt = row["created_at"]
+        updatedAt = row["updated_at"]
+
+        // Decode metadata from JSON string
+        if let metadataString: String = row["metadata"],
            let metadataData = metadataString.data(using: .utf8),
            let decoded = try? JSONDecoder().decode([String: String].self, from: metadataData) {
             metadata = decoded
         } else {
             metadata = [:]
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(type, forKey: .type)
-        try container.encodeIfPresent(inputText, forKey: .inputText)
-        try container.encodeIfPresent(inputFileId, forKey: .inputFileId)
-        try container.encodeIfPresent(outputText, forKey: .outputText)
-        try container.encodeIfPresent(outputFileId, forKey: .outputFileId)
-        try container.encode(createdAt, forKey: .createdAt)
-        try container.encode(updatedAt, forKey: .updatedAt)
-
-        // Encode metadata as JSON string
-        if let metadataData = try? JSONEncoder().encode(metadata),
-           let metadataString = String(data: metadataData, encoding: .utf8) {
-            try container.encode(metadataString, forKey: .metadata)
         }
     }
 }

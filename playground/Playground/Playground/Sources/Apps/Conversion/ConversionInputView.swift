@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 /// Input view for creating a new conversion
 struct ConversionInputView: View {
     @Environment(\.dismiss) private var dismiss
-    @Binding var conversions: [Conversion]
 
     @State private var selectedType: ConversionType = .textToText
     @State private var inputText: String = ""
@@ -13,6 +12,7 @@ struct ConversionInputView: View {
     @State private var isConverting = false
     @State private var streamingOutput = ""
     @State private var currentConversion: Conversion? = nil
+    @State private var navigateToChatId: String? = nil
 
     private let conversionService = ConversionService.shared
 
@@ -94,6 +94,9 @@ struct ConversionInputView: View {
                 allowsMultipleSelection: false
             ) { (result: Swift.Result<[URL], Error>) in
                 handleFileSelection(result)
+            }
+            .navigationDestination(item: $navigateToChatId) { chatId in
+                ChatView(chatId: chatId)
             }
         }
     }
@@ -191,20 +194,13 @@ struct ConversionInputView: View {
                         switch event {
                         case .conversionCreated(let conversion):
                             currentConversion = conversion
-                            conversions.insert(conversion, at: 0)
 
                         case .textChunk(let chunk):
                             streamingOutput += chunk
 
-                        case .completed(let fullText):
-                            // Update the conversion in the list
-                            if let index = conversions.firstIndex(where: { $0.id == currentConversion?.id }) {
-                                var updated = conversions[index]
-                                updated.outputText = fullText
-                                conversions[index] = updated
-                            }
-
+                        case .completed(_, let chatId):
                             isConverting = false
+                            navigateToChatId = chatId
                             dismiss()
 
                         case .progress:
@@ -213,13 +209,12 @@ struct ConversionInputView: View {
                     }
                 } else {
                     // Non-streaming conversion
-                    let conversion = try await conversionService.convert(
+                    _ = try await conversionService.convert(
                         type: selectedType,
                         inputText: inputText.isEmpty ? nil : inputText,
                         inputFileURL: selectedFileURL
                     )
 
-                    conversions.insert(conversion, at: 0)
                     isConverting = false
                     dismiss()
                 }
@@ -233,5 +228,5 @@ struct ConversionInputView: View {
 }
 
 #Preview {
-    ConversionInputView(conversions: .constant([]))
+    ConversionInputView()
 }

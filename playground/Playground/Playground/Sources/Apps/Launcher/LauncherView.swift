@@ -41,17 +41,12 @@ struct LauncherView: View {
 /// Individual app icon button in the launcher
 struct AppIconButton: View {
     let app: any SubApp
-    @StateObject private var runtimeManager = AppRuntimeManager.shared
 
     var body: some View {
-        Button {
-            Task {
-                // Launch app using AppRuntimeManager
-                // This will either create a new instance or switch to existing one
-                await runtimeManager.launchApp(appId: app.id) {
-                    return app
-                }
-            }
+        NavigationLink {
+            app.buildView()
+                .navigationTitle(app.name)
+                .navigationBarTitleDisplayMode(.inline)
         } label: {
             VStack(spacing: 8) {
                 // App Icon

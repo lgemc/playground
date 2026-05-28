@@ -16,13 +16,7 @@ class ConversionApp: SubApp {
     init() {}
 
     func buildView() -> AnyView {
-        AnyView(
-            NavigationStack {
-                ConversionHistoryView()
-                    .navigationTitle("AI Conversions")
-                    .navigationBarTitleDisplayMode(.large)
-            }
-        )
+        AnyView(ConversionHistoryView())
     }
 
     // MARK: - Lifecycle

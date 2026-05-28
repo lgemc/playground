@@ -11,6 +11,7 @@ struct ConversionCard: View {
     let conversion: Conversion
     @State private var outputImage: PlatformImage? = nil
     @State private var inputImage: PlatformImage? = nil
+    @State private var navigateToFileId: String? = nil
 
     private let fileStorage = FileStorage.shared
 
@@ -43,6 +44,9 @@ struct ConversionCard: View {
         .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
         .onAppear {
             loadImages()
+        }
+        .navigationDestination(item: $navigateToFileId) { fileId in
+            FileViewerView(fileId: fileId)
         }
     }
 
@@ -89,7 +93,12 @@ struct ConversionCard: View {
                 .fontWeight(.semibold)
 
             if let fileId = conversion.inputFileId {
-                filePreview(fileId: fileId, image: inputImage)
+                Button {
+                    navigateToFileId = fileId
+                } label: {
+                    filePreview(fileId: fileId, image: inputImage)
+                }
+                .buttonStyle(.plain)
             } else if let text = conversion.inputText, !text.isEmpty {
                 Text(text)
                     .font(.body)
@@ -118,13 +127,15 @@ struct ConversionCard: View {
                 .fontWeight(.semibold)
 
             if let fileId = conversion.outputFileId {
-                filePreview(fileId: fileId, image: outputImage)
+                Button {
+                    navigateToFileId = fileId
+                } label: {
+                    filePreview(fileId: fileId, image: outputImage)
+                }
+                .buttonStyle(.plain)
             } else if let text = conversion.outputText, !text.isEmpty {
-                Text(text)
-                    .font(.body)
-                    .foregroundColor(.primary)
+                MarkdownText(content: text, textColor: .primary)
                     .lineLimit(5)
-                    .textSelection(.enabled)
             } else {
                 HStack(spacing: 8) {
                     ProgressView()
