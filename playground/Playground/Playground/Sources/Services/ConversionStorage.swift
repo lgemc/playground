@@ -131,6 +131,64 @@ class ConversionStorage {
         }
     }
 
+    // MARK: - Favorites & Labels
+
+    func updateFavorite(id: String, isFavorite: Bool) -> Result<Void, Error> {
+        return Result {
+            try database.execute { db in
+                try db.execute(
+                    sql: "UPDATE conversions SET is_favorite = ?, updated_at = ? WHERE id = ?",
+                    arguments: [isFavorite, Date(), id]
+                )
+            }
+        }
+    }
+
+    func updateLabel(id: String, label: String?) -> Result<Void, Error> {
+        return Result {
+            try database.execute { db in
+                try db.execute(
+                    sql: "UPDATE conversions SET label = ?, updated_at = ? WHERE id = ?",
+                    arguments: [label, Date(), id]
+                )
+            }
+        }
+    }
+
+    func getAllLabels() -> Result<[String], Error> {
+        return Result {
+            try database.read { db in
+                let labels = try String.fetchAll(
+                    db,
+                    sql: "SELECT DISTINCT label FROM conversions WHERE label IS NOT NULL ORDER BY label"
+                )
+                return labels
+            }
+        }
+    }
+
+    func getFavorites() -> Result<[Conversion], Error> {
+        return Result {
+            try database.read { db in
+                try Conversion
+                    .filter(Conversion.Columns.isFavorite == true)
+                    .order(Conversion.Columns.createdAt.desc)
+                    .fetchAll(db)
+            }
+        }
+    }
+
+    func getConversionsByLabel(label: String) -> Result<[Conversion], Error> {
+        return Result {
+            try database.read { db in
+                try Conversion
+                    .filter(Conversion.Columns.label == label)
+                    .order(Conversion.Columns.createdAt.desc)
+                    .fetchAll(db)
+            }
+        }
+    }
+
     // MARK: - Statistics
 
     func getConversionCount() -> Result<Int, Error> {

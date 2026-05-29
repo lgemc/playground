@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 struct ConversionInputView: View {
     @Environment(\.dismiss) private var dismiss
 
+    let preselectedType: ConversionType?
+
     @State private var selectedType: ConversionType = .textToText
     @State private var inputText: String = ""
     @State private var selectedFileURL: URL? = nil
@@ -13,8 +15,17 @@ struct ConversionInputView: View {
     @State private var streamingOutput = ""
     @State private var currentConversion: Conversion? = nil
     @State private var navigateToChatId: String? = nil
+    @State private var progressStatus = ""
+    @State private var progressPercentage: Double = 0.0
+    @State private var elapsedTime: TimeInterval = 0
+    @State private var statusTimer: Timer? = nil
 
     private let conversionService = ConversionService.shared
+
+    init(preselectedType: ConversionType? = nil) {
+        self.preselectedType = preselectedType
+        self._selectedType = State(initialValue: preselectedType ?? .textToText)
+    }
 
     var body: some View {
         NavigationStack {
@@ -54,18 +65,40 @@ struct ConversionInputView: View {
                     Text("Input")
                 }
 
+                // Progress status
+                if isConverting && !progressStatus.isEmpty {
+                    Section {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text(progressStatus)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text(formatElapsedTime(elapsedTime))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            if progressPercentage > 0 {
+                                ProgressView(value: progressPercentage, total: 1.0)
+                                    .progressViewStyle(.linear)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    } header: {
+                        Text("Progress")
+                    }
+                }
+
                 // Streaming output (if applicable)
-                if isConverting && selectedType == .textToText && !streamingOutput.isEmpty {
+                if isConverting && (selectedType == .textToText || selectedType == .fileToText) && !streamingOutput.isEmpty {
                     Section {
                         MarkdownText(content: streamingOutput, textColor: .primary)
                             .textSelection(.enabled)
                     } header: {
-                        HStack {
-                            Text("Output")
-                            Spacer()
-                            ProgressView()
-                                .controlSize(.small)
-                        }
+                        Text(selectedType == .fileToText ? "Summary" : "Output")
                     }
                 }
             }
@@ -74,9 +107,14 @@ struct ConversionInputView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        if isConverting {
+                            // Stop the conversion
+                            isConverting = false
+                            statusTimer?.invalidate()
+                            print("🛑 User cancelled conversion")
+                        }
                         dismiss()
                     }
-                    .disabled(isConverting)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
@@ -177,11 +215,20 @@ struct ConversionInputView: View {
 
     private func performConversion() {
         isConverting = true
+        elapsedTime = 0
+        progressStatus = "🔄 Starting conversion..."
+        progressPercentage = 0
+
+        // Start timer
+        let startTime = Date()
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            self.elapsedTime = Date().timeIntervalSince(startTime)
+        }
 
         Task { @MainActor in
             do {
-                // Use streaming for text-to-text, non-streaming for others
-                if selectedType == .textToText {
+                // Use streaming for text-to-text and file-to-text
+                if selectedType == .textToText || selectedType == .fileToText {
                     streamingOutput = ""
 
                     for try await event in conversionService.convertStream(
@@ -192,11 +239,18 @@ struct ConversionInputView: View {
                         switch event {
                         case .conversionCreated(let conversion):
                             currentConversion = conversion
+                            progressStatus = "📄 Processing file..."
+                            progressPercentage = 0.3
 
                         case .textChunk(let chunk):
                             streamingOutput += chunk
+                            progressStatus = "✨ Generating..."
+                            progressPercentage = 0.5
 
                         case .completed(_, let chatId):
+                            progressStatus = "✅ Complete!"
+                            progressPercentage = 1.0
+                            statusTimer?.invalidate()
                             isConverting = false
                             navigateToChatId = chatId
                             dismiss()
@@ -207,11 +261,18 @@ struct ConversionInputView: View {
                     }
                 } else {
                     // Non-streaming conversion
+                    progressStatus = "🔄 Converting..."
+                    progressPercentage = 0.5
+
                     let (_, chatId) = try await conversionService.convert(
                         type: selectedType,
                         inputText: inputText.isEmpty ? nil : inputText,
                         inputFileURL: selectedFileURL
                     )
+
+                    progressStatus = "✅ Complete!"
+                    progressPercentage = 1.0
+                    statusTimer?.invalidate()
 
                     isConverting = false
                     navigateToChatId = chatId
@@ -219,9 +280,33 @@ struct ConversionInputView: View {
                 }
             } catch {
                 print("❌ Conversion failed: \(error)")
+                progressStatus = "❌ Failed: \(error.localizedDescription)"
+                statusTimer?.invalidate()
                 isConverting = false
-                // TODO: Show error alert
             }
+        }
+    }
+
+    private func formatElapsedTime(_ seconds: TimeInterval) -> String {
+        if seconds < 60 {
+            return String(format: "%.1fs", seconds)
+        } else {
+            let minutes = Int(seconds / 60)
+            let secs = Int(seconds.truncatingRemainder(dividingBy: 60))
+            return "\(minutes)m \(secs)s"
+        }
+    }
+
+    private func getModelName(for type: ConversionType) -> String {
+        switch type {
+        case .textToText, .fileToText:
+            return "Qwen 3.5 2B"
+        case .imageToText:
+            return "Qwen VL"
+        case .textToAudio:
+            return "Kokoro TTS"
+        case .audioToText, .videoToText:
+            return "Whisper"
         }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 
 /// Service for extracting text content from files
 class FileExtractionService {
@@ -13,6 +14,9 @@ class FileExtractionService {
         "sh", "bash", "zsh", "fish", "log", "conf", "ini", "csv"
     ]
 
+    /// Supported PDF file extension
+    private let pdfExtension = "pdf"
+
     // MARK: - Extraction
 
     /// Extract text from a file at the given path
@@ -20,14 +24,19 @@ class FileExtractionService {
         let url = URL(fileURLWithPath: filePath)
         let fileExtension = url.pathExtension.lowercased()
 
-        // Check if file is a supported text file
-        guard textExtensions.contains(fileExtension) else {
-            throw ExtractionError.unsupportedFileType
-        }
-
         // Check if file exists
         guard FileManager.default.fileExists(atPath: filePath) else {
             throw ExtractionError.fileNotFound
+        }
+
+        // Handle PDF files
+        if fileExtension == pdfExtension {
+            return try extractTextFromPDF(at: url)
+        }
+
+        // Check if file is a supported text file
+        guard textExtensions.contains(fileExtension) else {
+            throw ExtractionError.unsupportedFileType
         }
 
         // Read file contents
@@ -37,6 +46,36 @@ class FileExtractionService {
         } catch {
             throw ExtractionError.readFailed(underlyingError: error)
         }
+    }
+
+    /// Extract text from PDF file
+    private func extractTextFromPDF(at url: URL) throws -> String {
+        guard let pdfDocument = PDFDocument(url: url) else {
+            throw ExtractionError.pdfLoadFailed
+        }
+
+        var extractedText = ""
+        let pageCount = pdfDocument.pageCount
+
+        print("📄 Extracting text from PDF: \(pageCount) pages")
+
+        for pageIndex in 0..<pageCount {
+            guard let page = pdfDocument.page(at: pageIndex) else {
+                continue
+            }
+
+            if let pageText = page.string {
+                extractedText += pageText
+                extractedText += "\n\n" // Add spacing between pages
+            }
+        }
+
+        if extractedText.isEmpty {
+            throw ExtractionError.noTextFound
+        }
+
+        print("✅ Extracted \(extractedText.count) characters from PDF")
+        return extractedText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Extract text and update file in storage
@@ -59,14 +98,16 @@ class FileExtractionService {
 
     /// Check if a file type is supported for extraction
     func isSupported(fileExtension: String) -> Bool {
-        return textExtensions.contains(fileExtension.lowercased())
+        let ext = fileExtension.lowercased()
+        return textExtensions.contains(ext) || ext == pdfExtension
     }
 
     /// Check if a file type is supported by MIME type
     func isSupported(mimeType: String) -> Bool {
         return mimeType.hasPrefix("text/") ||
                mimeType == "application/json" ||
-               mimeType == "application/xml"
+               mimeType == "application/xml" ||
+               mimeType == "application/pdf"
     }
 
     // MARK: - File Information
@@ -117,6 +158,8 @@ enum ExtractionError: LocalizedError {
     case fileNotFound
     case unsupportedFileType
     case readFailed(underlyingError: Error)
+    case pdfLoadFailed
+    case noTextFound
 
     var errorDescription: String? {
         switch self {
@@ -126,6 +169,10 @@ enum ExtractionError: LocalizedError {
             return "Unsupported file type for text extraction"
         case .readFailed(let error):
             return "Failed to read file: \(error.localizedDescription)"
+        case .pdfLoadFailed:
+            return "Failed to load PDF document"
+        case .noTextFound:
+            return "No text found in the document"
         }
     }
 }

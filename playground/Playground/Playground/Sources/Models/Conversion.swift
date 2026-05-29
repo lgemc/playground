@@ -111,6 +111,8 @@ extension Conversion: FetchableRecord, PersistableRecord {
         inputFileId = row["input_file_id"]
         outputText = row["output_text"]
         outputFileId = row["output_file_id"]
+        isFavorite = row["is_favorite"] ?? false
+        label = row["label"]
         createdAt = row["created_at"]
         updatedAt = row["updated_at"]
 

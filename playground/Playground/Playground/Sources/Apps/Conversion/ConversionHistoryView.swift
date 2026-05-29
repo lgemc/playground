@@ -6,19 +6,46 @@ struct ConversionHistoryView: View {
     @State private var filteredConversions: [Conversion] = []
     @State private var searchText = ""
     @State private var showingInput = false
+    @State private var preselectedInputType: ConversionType? = nil
     @State private var showingSettings = false
     @State private var isLoading = true
+    @State private var selectedFilter: FilterOption = .all
+    @State private var availableLabels: [String] = []
 
     private let conversionService = ConversionService.shared
+    private let conversionStorage = ConversionStorage.shared
+
+    enum FilterOption: Equatable {
+        case all
+        case favorites
+        case label(String)
+
+        var displayName: String {
+            switch self {
+            case .all: return "All"
+            case .favorites: return "Favorites"
+            case .label(let name): return name
+            }
+        }
+    }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            if isLoading {
-                loadingView
-            } else if conversions.isEmpty {
-                emptyStateView
-            } else {
-                conversionsListView
+            VStack(spacing: 0) {
+                // Filter pills
+                if !conversions.isEmpty {
+                    filterBar
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                }
+
+                if isLoading {
+                    loadingView
+                } else if conversions.isEmpty {
+                    emptyStateView
+                } else {
+                    conversionsListView
+                }
             }
 
             // Floating Action Button
@@ -28,6 +55,9 @@ struct ConversionHistoryView: View {
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, prompt: "Search conversions...")
         .onChange(of: searchText) { oldValue, newValue in
+            filterConversions()
+        }
+        .onChange(of: selectedFilter) { oldValue, newValue in
             filterConversions()
         }
         .toolbar {
@@ -41,22 +71,60 @@ struct ConversionHistoryView: View {
         }
         .onAppear {
             loadConversions()
+            loadLabels()
         }
         .sheet(isPresented: $showingInput, onDismiss: {
             // Reload from storage to ensure we have the latest persisted data
             // Small delay to ensure async storage write completes
             print("🔄 Sheet dismissed, reloading conversions...")
+            preselectedInputType = nil
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
                 loadConversions()
             }
         }) {
-            ConversionInputView()
+            ConversionInputView(preselectedType: preselectedInputType)
         }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
                 SettingsView()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                // All filter
+                FilterPill(
+                    title: "All",
+                    isSelected: selectedFilter == .all
+                ) {
+                    selectedFilter = .all
+                }
+
+                // Favorites filter
+                FilterPill(
+                    title: "Favorites",
+                    icon: "star.fill",
+                    isSelected: selectedFilter == .favorites
+                ) {
+                    selectedFilter = .favorites
+                }
+
+                // Label filters
+                ForEach(availableLabels, id: \.self) { label in
+                    FilterPill(
+                        title: label,
+                        icon: "tag.fill",
+                        isSelected: selectedFilter == .label(label)
+                    ) {
+                        selectedFilter = .label(label)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
         }
     }
 
@@ -97,23 +165,33 @@ struct ConversionHistoryView: View {
             ForEach(filteredConversions) { conversion in
                 if let chatId = conversion.metadata["chat_id"] {
                     NavigationLink(value: chatId) {
-                        ConversionCard(conversion: conversion)
+                        ConversionCard(conversion: conversion, onUpdate: {
+                            loadConversions()
+                            loadLabels()
+                        })
                     }
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     .listRowSeparator(.hidden)
                     .onAppear {
-                        // Auto-refresh if conversion is still processing
+                        // Auto-refresh if conversion is still processing or streaming
                         if conversion.outputText == nil && conversion.outputFileId == nil {
+                            scheduleRefresh(for: conversion)
+                        } else if conversion.metadata["streaming"] == "true" {
                             scheduleRefresh(for: conversion)
                         }
                     }
                 } else {
-                    ConversionCard(conversion: conversion)
+                    ConversionCard(conversion: conversion, onUpdate: {
+                        loadConversions()
+                        loadLabels()
+                    })
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowSeparator(.hidden)
                         .onAppear {
-                            // Auto-refresh if conversion is still processing
+                            // Auto-refresh if conversion is still processing or streaming
                             if conversion.outputText == nil && conversion.outputFileId == nil {
+                                scheduleRefresh(for: conversion)
+                            } else if conversion.metadata["streaming"] == "true" {
                                 scheduleRefresh(for: conversion)
                             }
                         }
@@ -141,7 +219,15 @@ struct ConversionHistoryView: View {
 
     @ViewBuilder
     private var addButton: some View {
-        Button(action: { showingInput = true }) {
+        Menu {
+            ForEach(ConversionType.allCases, id: \.self) { type in
+                Button {
+                    openInputWithType(type)
+                } label: {
+                    Label(type.displayName, systemImage: type.inputIcon)
+                }
+            }
+        } label: {
             Image(systemName: "plus")
                 .font(.title2)
                 .fontWeight(.semibold)
@@ -150,11 +236,19 @@ struct ConversionHistoryView: View {
                 .background(Color.blue)
                 .clipShape(Circle())
                 .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+        } primaryAction: {
+            showingInput = true
         }
-        .padding(24)
+        .padding(.trailing, 24)
+        .padding(.bottom, 80) // Closer to bottom, near search area
     }
 
     // MARK: - Data Management
+
+    private func openInputWithType(_ type: ConversionType) {
+        preselectedInputType = type
+        showingInput = true
+    }
 
     private func loadConversions() {
         let loaded = conversionService.getAllConversions()
@@ -168,10 +262,21 @@ struct ConversionHistoryView: View {
     }
 
     private func filterConversions() {
-        if searchText.isEmpty {
-            filteredConversions = conversions
-        } else {
-            filteredConversions = conversions.filter { conversion in
+        var filtered = conversions
+
+        // Apply filter
+        switch selectedFilter {
+        case .all:
+            break // No filtering
+        case .favorites:
+            filtered = filtered.filter { $0.isFavorite }
+        case .label(let labelName):
+            filtered = filtered.filter { $0.label == labelName }
+        }
+
+        // Apply search
+        if !searchText.isEmpty {
+            filtered = filtered.filter { conversion in
                 // Search in input text
                 if let input = conversion.inputText, input.localizedCaseInsensitiveContains(searchText) {
                     return true
@@ -187,6 +292,15 @@ struct ConversionHistoryView: View {
                 return false
             }
         }
+
+        filteredConversions = filtered
+    }
+
+    private func loadLabels() {
+        let result = conversionStorage.getAllLabels()
+        if case .ok(let labels) = result {
+            availableLabels = labels
+        }
     }
 
     private func deleteConversion(_ conversion: Conversion) {
@@ -200,19 +314,52 @@ struct ConversionHistoryView: View {
     }
 
     private func scheduleRefresh(for conversion: Conversion) {
-        // Refresh after 2 seconds to check if processing is complete
+        // Refresh every 0.5 seconds for streaming, 2 seconds for processing
+        let delay = conversion.metadata["streaming"] == "true" ? 500_000_000 : 2_000_000_000
+
         Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(delay))
 
             if let updated = conversionService.getConversion(id: conversion.id),
                let index = conversions.firstIndex(where: { $0.id == conversion.id }) {
                 conversions[index] = updated
+                filterConversions() // Update filtered list to show new content
 
-                // Schedule another refresh if still processing
+                // Schedule another refresh if still processing or streaming
                 if updated.outputText == nil && updated.outputFileId == nil {
+                    scheduleRefresh(for: updated)
+                } else if updated.metadata["streaming"] == "true" {
                     scheduleRefresh(for: updated)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Filter Pill
+
+struct FilterPill: View {
+    let title: String
+    var icon: String? = nil
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let icon = icon {
+                    Image(systemName: icon)
+                        .font(.caption)
+                }
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(isSelected ? .semibold : .regular)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.blue : Color(.systemGray5))
+            .foregroundColor(isSelected ? .white : .primary)
+            .cornerRadius(20)
         }
     }
 }

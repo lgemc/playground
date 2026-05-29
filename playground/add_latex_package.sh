@@ -1,0 +1,25 @@
+#!/bin/bash
+
+echo "======================================"
+echo "Adding LaTeXSwiftUI Package to Xcode"
+echo "======================================"
+echo ""
+echo "Opening Xcode project..."
+open Playground.xcodeproj
+
+echo ""
+echo "STEPS TO ADD THE PACKAGE:"
+echo ""
+echo "1. In Xcode, select 'Playground' project (top item in navigator)"
+echo "2. Select the 'Playground' TARGET (not project)"
+echo "3. Click on the 'Package Dependencies' tab"
+echo "4. Click the '+' button at the bottom"
+echo "5. In the search field, paste:"
+echo "   https://github.com/colinc86/LaTeXSwiftUI"
+echo "6. Select 'Up to Next Major Version' with minimum: 1.3.2"
+echo "7. Click 'Add Package'"
+echo "8. Make sure 'LaTeXSwiftUI' is checked and click 'Add Package'"
+echo ""
+echo "======================================"
+echo "After adding, close Xcode and rebuild"
+echo "======================================"

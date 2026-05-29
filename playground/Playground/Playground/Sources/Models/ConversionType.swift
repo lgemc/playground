@@ -3,7 +3,7 @@ import Foundation
 /// Defines all supported AI conversion types
 enum ConversionType: String, Codable, CaseIterable {
     case textToText = "text_to_text"
-    case textToImage = "text_to_image"
+    // case textToImage = "text_to_image" // Disabled due to dependency conflicts
     case imageToText = "image_to_text"
     case textToAudio = "text_to_audio"
     case audioToText = "audio_to_text"
@@ -13,7 +13,6 @@ enum ConversionType: String, Codable, CaseIterable {
     var displayName: String {
         switch self {
         case .textToText: return "Text → Text"
-        case .textToImage: return "Text → Image"
         case .imageToText: return "Image → Text"
         case .textToAudio: return "Text → Audio"
         case .audioToText: return "Audio → Text"
@@ -24,7 +23,7 @@ enum ConversionType: String, Codable, CaseIterable {
 
     var inputIcon: String {
         switch self {
-        case .textToText, .textToImage, .textToAudio:
+        case .textToText, .textToAudio:
             return "textformat"
         case .imageToText:
             return "photo"
@@ -41,8 +40,6 @@ enum ConversionType: String, Codable, CaseIterable {
         switch self {
         case .textToText, .imageToText, .audioToText, .videoToText, .fileToText:
             return "textformat"
-        case .textToImage:
-            return "photo"
         case .textToAudio:
             return "waveform"
         }
@@ -52,7 +49,7 @@ enum ConversionType: String, Codable, CaseIterable {
         switch self {
         case .imageToText, .audioToText, .videoToText, .fileToText:
             return true
-        case .textToText, .textToImage, .textToAudio:
+        case .textToText, .textToAudio:
             return false
         }
     }

@@ -323,6 +323,21 @@ class PlaygroundDatabase {
             print("✅ Created conversions table")
         }
 
+        // Migration v10: Add favorites and labels to conversions
+        migrator.registerMigration("v10_conversions_favorites_labels") { db in
+            print("⭐ Adding favorites and labels to conversions...")
+
+            try db.alter(table: "conversions") { t in
+                t.add(column: "is_favorite", .boolean).notNull().defaults(to: false)
+                t.add(column: "label", .text)
+            }
+
+            // Create index for favorites
+            try db.create(index: "idx_conversions_is_favorite", on: "conversions", columns: ["is_favorite"])
+
+            print("✅ Added favorites and labels to conversions")
+        }
+
         try migrator.migrate(queue)
     }
 

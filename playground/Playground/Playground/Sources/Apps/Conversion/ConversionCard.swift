@@ -10,13 +10,26 @@ import AppKit
 /// Card view for displaying a single conversion in the history
 struct ConversionCard: View {
     let conversion: Conversion
+    var onUpdate: (() -> Void)? = nil
+
     @State private var outputImage: PlatformImage? = nil
     @State private var inputImage: PlatformImage? = nil
     @State private var navigateToFileId: String? = nil
     @State private var isPlaying: Bool = false
     @State private var audioPlayer: AVAudioPlayer? = nil
+    @State private var showingLabelSheet: Bool = false
+    @State private var isFavorite: Bool
+    @State private var currentLabel: String?
 
     private let fileStorage = FileStorage.shared
+    private let conversionStorage = ConversionStorage.shared
+
+    init(conversion: Conversion, onUpdate: (() -> Void)? = nil) {
+        self.conversion = conversion
+        self.onUpdate = onUpdate
+        self._isFavorite = State(initialValue: conversion.isFavorite)
+        self._currentLabel = State(initialValue: conversion.label)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -40,6 +53,9 @@ struct ConversionCard: View {
 
             // Output section
             outputSection
+
+            // Action bar (iOS Translate style)
+            actionBar
         }
         .padding()
         .background(Color(.systemBackground))
@@ -50,6 +66,10 @@ struct ConversionCard: View {
         }
         .navigationDestination(item: $navigateToFileId) { fileId in
             FileViewerView(fileId: fileId)
+        }
+        .sheet(isPresented: $showingLabelSheet) {
+            LabelSelectorSheet(selectedLabel: $currentLabel, onSave: saveLabel)
+                .presentationDetents([.height(280)])
         }
     }
 
@@ -118,6 +138,60 @@ struct ConversionCard: View {
         .padding(12)
         .background(Color(.systemGray6))
         .cornerRadius(12)
+    }
+
+    @ViewBuilder
+    private var actionBar: some View {
+        HStack(spacing: 0) {
+            // Star (favorite)
+            Button {
+                toggleFavorite()
+            } label: {
+                VStack(spacing: 6) {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .font(.title3)
+                        .foregroundColor(isFavorite ? .yellow : .blue)
+                    Text("Favorite")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+
+            // Label
+            Button {
+                showingLabelSheet = true
+            } label: {
+                VStack(spacing: 6) {
+                    Image(systemName: currentLabel != nil ? "tag.fill" : "tag")
+                        .font(.title3)
+                        .foregroundColor(.blue)
+                    Text("Label")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+
+            // Share
+            Button {
+                shareConversion()
+            } label: {
+                VStack(spacing: 6) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.title3)
+                        .foregroundColor(.blue)
+                    Text("Share")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, 8)
     }
 
     @ViewBuilder
@@ -370,6 +444,39 @@ struct ConversionCard: View {
         }
     }
 
+    // MARK: - Actions
+
+    private func toggleFavorite() {
+        isFavorite.toggle()
+
+        // Update in database
+        let result = conversionStorage.updateFavorite(id: conversion.id, isFavorite: isFavorite)
+        if case .err(let error) = result {
+            print("❌ Failed to update favorite: \(error)")
+            // Revert on error
+            isFavorite.toggle()
+        } else {
+            // Notify parent to reload
+            onUpdate?()
+        }
+    }
+
+    private func saveLabel() {
+        // Update in database
+        let result = conversionStorage.updateLabel(id: conversion.id, label: currentLabel)
+        if case .err(let error) = result {
+            print("❌ Failed to update label: \(error)")
+        } else {
+            // Notify parent to reload
+            onUpdate?()
+        }
+    }
+
+    private func shareConversion() {
+        // TODO: Implement share functionality
+        print("📤 Share conversion: \(conversion.id)")
+    }
+
     // MARK: - Helpers
 
     private func loadImages() {
@@ -413,6 +520,136 @@ struct ConversionCard: View {
     }
 }
 
+// MARK: - Label Selector Sheet
+
+struct LabelSelectorSheet: View {
+    @Binding var selectedLabel: String?
+    let onSave: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var labels: [String] = []
+    @State private var newLabelName: String = ""
+    @State private var showingAddLabel: Bool = false
+
+    private let conversionStorage = ConversionStorage.shared
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("Choose a label")
+                    .font(.headline)
+                    .padding(.top)
+
+                if labels.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "tag")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
+                        Text("No labels yet")
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                        Text("Tap + to create your first label")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
+                } else {
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            ForEach(labels, id: \.self) { label in
+                                Button {
+                                    if selectedLabel == label {
+                                        selectedLabel = nil // Deselect
+                                    } else {
+                                        selectedLabel = label
+                                    }
+                                    onSave()
+                                    dismiss()
+                                } label: {
+                                    HStack {
+                                        Text(label)
+                                            .foregroundColor(.primary)
+                                            .font(.body)
+
+                                        Spacer()
+
+                                        if selectedLabel == label {
+                                            Image(systemName: "checkmark")
+                                                .foregroundColor(.blue)
+                                        }
+                                    }
+                                    .padding()
+                                    .background(selectedLabel == label ? Color(.systemGray5) : Color(.systemBackground))
+                                    .cornerRadius(12)
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        deleteLabel(label)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+
+                Spacer()
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingAddLabel = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .alert("New Label", isPresented: $showingAddLabel) {
+                TextField("Label name", text: $newLabelName)
+                Button("Cancel", role: .cancel) {
+                    newLabelName = ""
+                }
+                Button("Add") {
+                    addLabel()
+                }
+            }
+            .onAppear {
+                loadLabels()
+            }
+        }
+    }
+
+    private func loadLabels() {
+        let result = conversionStorage.getAllLabels()
+        if case .ok(let loadedLabels) = result {
+            labels = loadedLabels
+        }
+    }
+
+    private func addLabel() {
+        let trimmed = newLabelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !labels.contains(trimmed) else {
+            newLabelName = ""
+            return
+        }
+
+        labels.append(trimmed)
+        labels.sort()
+        newLabelName = ""
+    }
+
+    private func deleteLabel(_ label: String) {
+        labels.removeAll { $0 == label }
+    }
+}
+
 #Preview {
     VStack(spacing: 16) {
         // Text to text conversion
@@ -425,12 +662,13 @@ struct ConversionCard: View {
             )
         )
 
-        // Text to image conversion (processing)
+        // Image to text conversion
         ConversionCard(
             conversion: Conversion(
-                type: .textToImage,
-                inputText: "A serene mountain landscape at sunset",
-                metadata: ["model": "flux"]
+                type: .imageToText,
+                inputFileId: "sample-image",
+                outputText: "A beautiful landscape with mountains and trees under a clear blue sky.",
+                metadata: ["model": "qwen-vl"]
             )
         )
     }

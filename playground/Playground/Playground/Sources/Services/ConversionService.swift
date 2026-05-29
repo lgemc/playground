@@ -10,7 +10,7 @@ class ConversionService {
     private let fileStorage = FileStorage.shared
     private let chatStorage = ChatStorage.shared
     private let mlx = MLXService.shared
-    private let flux = MLXFluxService.shared
+    private let vlm = MLXVLMService.shared
     private let fileExtraction = FileExtractionService.shared
 
     private init() {}
@@ -116,15 +116,16 @@ class ConversionService {
 
     // MARK: - Private Conversion Logic
 
+    func performConversionPublic(conversion: Conversion) async throws {
+        try await performConversion(conversion: conversion)
+    }
+
     private func performConversion(conversion: Conversion) async throws {
         let startTime = Date()
 
         switch conversion.type {
         case .textToText:
             try await performTextToText(conversion: conversion)
-
-        case .textToImage:
-            try await performTextToImage(conversion: conversion)
 
         case .imageToText:
             try await performImageToText(conversion: conversion)
@@ -196,57 +197,104 @@ class ConversionService {
         conversion: Conversion,
         continuation: AsyncThrowingStream<ConversionStreamEvent, Error>.Continuation
     ) async throws {
-        guard conversion.type == .textToText else {
+        let startTime = Date()
+        var accumulatedText = ""
+        var userPrompt = ""
+        var systemPrompt: String? = nil
+
+        switch conversion.type {
+        case .textToText:
+            guard let inputText = conversion.inputText, !inputText.isEmpty else {
+                throw ConversionError.missingInput
+            }
+            userPrompt = inputText
+
+        case .fileToText:
+            guard let fileId = conversion.inputFileId else {
+                throw ConversionError.missingInput
+            }
+
+            // Load file
+            let fileResult = fileStorage.getFile(id: fileId)
+            guard case .ok(let fileOpt) = fileResult, let file = fileOpt else {
+                throw ConversionError.fileNotFound
+            }
+
+            // Extract text from file
+            print("📄 Extracting text from: \(file.name)")
+            let extractedText = try fileExtraction.extractText(from: file.absolutePath)
+            print("✅ Extracted \(extractedText.count) characters")
+
+            // Prepare summarization prompt
+            systemPrompt = "You are a helpful assistant that summarizes documents concisely."
+            userPrompt = "Summarize the following document:\n\n\(extractedText)"
+
+        default:
             throw ConversionError.streamingNotSupported(conversion.type)
         }
 
-        guard let inputText = conversion.inputText, !inputText.isEmpty else {
-            throw ConversionError.missingInput
-        }
-
-        let startTime = Date()
-        var accumulatedText = ""
-
         // Stream from MLX
-        for try await chunk in mlx.promptStream(inputText) {
+        for try await chunk in mlx.promptStream(userPrompt, systemPrompt: systemPrompt) {
             accumulatedText += chunk
             continuation.yield(.textChunk(chunk))
         }
 
         // Save final result
         let duration = Date().timeIntervalSince(startTime)
-        let metadata: [String: String] = [
+        var metadata: [String: String] = [
             "model": "mlx",
             "duration": String(format: "%.2f", duration)
         ]
 
-        // Create a chat from this conversion
-        var chatId: String? = nil
-        if let inputText = conversion.inputText {
-            let chatResult = chatStorage.createChat(title: String(inputText.prefix(50)))
-            if case .ok(let chat) = chatResult {
-                chatId = chat.id
-
-                // Add user message
-                _ = chatStorage.createMessage(chatId: chat.id, role: .user, content: inputText)
-
-                // Add assistant response
-                _ = chatStorage.createMessage(chatId: chat.id, role: .assistant, content: accumulatedText)
-
-                print("✅ Created chat \(chat.id) from conversion")
+        // Add extracted length for file conversions
+        if conversion.type == .fileToText, let fileId = conversion.inputFileId {
+            let fileResult = fileStorage.getFile(id: fileId)
+            if case .ok(let fileOpt) = fileResult, let file = fileOpt {
+                if let extractedText = try? fileExtraction.extractText(from: file.absolutePath) {
+                    metadata["extracted_length"] = String(extractedText.count)
+                }
             }
         }
 
-        // Update metadata with chat ID and duration
-        var finalMetadata = metadata
+        // Create a chat from this conversion
+        var chatId: String? = nil
+        let chatTitle: String
+        if conversion.type == .fileToText, let fileId = conversion.inputFileId {
+            let fileResult = fileStorage.getFile(id: fileId)
+            if case .ok(let fileOpt) = fileResult, let file = fileOpt {
+                chatTitle = "Summary: \(file.name)"
+            } else {
+                chatTitle = "File Summary"
+            }
+        } else if let inputText = conversion.inputText {
+            chatTitle = String(inputText.prefix(50))
+        } else {
+            chatTitle = "Conversion"
+        }
+
+        let chatResult = chatStorage.createChat(title: chatTitle)
+        if case .ok(let chat) = chatResult {
+            chatId = chat.id
+
+            // Add user message
+            let userMessage = conversion.type == .fileToText ? "Summarize this document" : (conversion.inputText ?? "")
+            _ = chatStorage.createMessage(chatId: chat.id, role: .user, content: userMessage)
+
+            // Add assistant response
+            _ = chatStorage.createMessage(chatId: chat.id, role: .assistant, content: accumulatedText)
+
+            print("✅ Created chat \(chat.id) from \(conversion.type) conversion")
+        }
+
+        // Update metadata with chat ID
         if let chatId = chatId {
-            finalMetadata["chat_id"] = chatId
+            metadata["chat_id"] = chatId
         }
 
         try updateConversionStorage(
             id: conversion.id,
             outputText: accumulatedText,
-            metadata: finalMetadata
+            metadata: metadata
         )
 
         continuation.yield(.completed(accumulatedText, chatId: chatId))
@@ -268,44 +316,6 @@ class ConversionService {
         )
     }
 
-    private func performTextToImage(conversion: Conversion) async throws {
-        guard let prompt = conversion.inputText, !prompt.isEmpty else {
-            throw ConversionError.missingInput
-        }
-
-        // Generate image with Flux
-        let image = try await flux.generate(prompt: prompt)
-
-        // Save image to file storage
-        let imageData: Data
-        #if canImport(UIKit)
-        guard let data = image.pngData() else {
-            throw ConversionError.imageConversionFailed
-        }
-        imageData = data
-        #elseif canImport(AppKit)
-        guard let tiffData = image.tiffRepresentation,
-              let bitmapImage = NSBitmapImageRep(data: tiffData),
-              let data = bitmapImage.representation(using: .png, properties: [:]) else {
-            throw ConversionError.imageConversionFailed
-        }
-        imageData = data
-        #endif
-
-        let filename = "image_\(Date().timeIntervalSince1970).png"
-        let outputFileId = try await saveGeneratedFile(
-            data: imageData,
-            filename: filename,
-            mimeType: "image/png"
-        )
-
-        try updateConversionStorage(
-            id: conversion.id,
-            outputFileId: outputFileId,
-            metadata: ["model": "flux"]
-        )
-    }
-
     private func performImageToText(conversion: Conversion) async throws {
         guard let fileId = conversion.inputFileId else {
             throw ConversionError.missingInput
@@ -317,14 +327,28 @@ class ConversionService {
             throw ConversionError.fileNotFound
         }
 
-        // TODO: Implement vision model (MLX Vision) when available
-        // For now, return placeholder
-        let output = "Image description: [Vision model not yet implemented]"
+        // Load image
+        let image: PlatformImage
+        #if canImport(UIKit)
+        guard let img = UIImage(contentsOfFile: file.absolutePath) else {
+            throw ConversionError.fileAccessDenied
+        }
+        image = img
+        #elseif canImport(AppKit)
+        guard let img = NSImage(contentsOfFile: file.absolutePath) else {
+            throw ConversionError.fileAccessDenied
+        }
+        image = img
+        #endif
+
+        // Analyze image with Qwen VLM
+        print("👁️ Analyzing image with Qwen VLM: \(file.name)")
+        let description = try await vlm.describeImage(image)
 
         try updateConversionStorage(
             id: conversion.id,
-            outputText: output,
-            metadata: ["model": "placeholder"]
+            outputText: description,
+            metadata: ["model": "qwen-vl"]
         )
     }
 
@@ -420,13 +444,16 @@ class ConversionService {
             throw ConversionError.fileNotFound
         }
 
-        // Extract text from file
+        // Extract text from file (this shows progress in logs)
+        print("📄 Extracting text from: \(file.name)")
         let extractedText = try fileExtraction.extractText(from: file.absolutePath)
+        print("✅ Extracted \(extractedText.count) characters")
 
-        // Summarize with LLM
+        // Summarize with LLM using streaming for live preview
         let systemPrompt = "You are a helpful assistant that summarizes documents concisely."
         let userPrompt = "Summarize the following document:\n\n\(extractedText)"
 
+        print("🤖 Generating summary...")
         let summary = try await mlx.prompt(userPrompt, systemPrompt: systemPrompt)
 
         try updateConversionStorage(
@@ -434,6 +461,8 @@ class ConversionService {
             outputText: summary,
             metadata: ["model": "mlx", "extracted_length": String(extractedText.count)]
         )
+
+        print("✅ Summary complete: \(summary.count) characters")
     }
 
     // MARK: - Storage Helpers
@@ -461,7 +490,7 @@ class ConversionService {
 
     // MARK: - File Management
 
-    private func importFile(url: URL) async throws -> String {
+    func importFile(url: URL) async throws -> String {
         let filename = url.lastPathComponent
 
         // Request security-scoped access for files from file picker
@@ -571,6 +600,7 @@ enum ConversionError: LocalizedError {
     case fileAccessDenied
     case imageConversionFailed
     case streamingNotSupported(ConversionType)
+    case serviceNotAvailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -580,6 +610,8 @@ enum ConversionError: LocalizedError {
             return "Storage failed: \(error.localizedDescription)"
         case .fileNotFound:
             return "Input file not found"
+        case .serviceNotAvailable(let message):
+            return message
         case .fileAccessDenied:
             return "Cannot access the selected file. Please try selecting it again."
         case .imageConversionFailed:
