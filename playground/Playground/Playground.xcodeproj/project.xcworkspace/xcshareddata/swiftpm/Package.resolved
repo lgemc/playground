@@ -1,5 +1,5 @@
 {
-  "originHash" : "1ea5756b51d18942b42a84b7deb318014e2b3cab9b8934c21d8c48496b577e5c",
+  "originHash" : "82ebb8d150641c8cd51f18075aa0e51c3a89df410a8999c0161620579d74535e",
   "pins" : [
     {
       "identity" : "alamofire",
@@ -35,6 +35,24 @@
       "state" : {
         "revision" : "2cf6c756e1e5ef6901ebae16576a7e4e4b834622",
         "version" : "6.29.3"
+      }
+    },
+    {
+      "identity" : "latexswiftui",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/colinc86/LaTeXSwiftUI",
+      "state" : {
+        "branch" : "main",
+        "revision" : "cc677f66b9cc1751e09207621d62d1cda0200675"
+      }
+    },
+    {
+      "identity" : "mathjaxswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/colinc86/MathJaxSwift",
+      "state" : {
+        "revision" : "00e9c3df6b1c82031c7fe3785028f3d21c0d73ba",
+        "version" : "3.5.0"
       }
     },
     {
@@ -152,6 +170,15 @@
       "state" : {
         "revision" : "e109d8b5308d0e05201d9a1dd1c475446a946a11",
         "version" : "1.4.0"
+      }
+    },
+    {
+      "identity" : "swift-html-entities",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Kitura/swift-html-entities",
+      "state" : {
+        "revision" : "d8ca73197f59ce260c71bd6d7f6eb8bbdccf508b",
+        "version" : "4.0.1"
       }
     },
     {
@@ -296,6 +323,15 @@
       "state" : {
         "revision" : "341bfd4172f6a57119bfd49bafa11cf5d21fab75",
         "version" : "0.2.3"
+      }
+    },
+    {
+      "identity" : "swiftdraw",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swhitty/SwiftDraw",
+      "state" : {
+        "revision" : "776456051ea2b099343e18ed8a53fca9dd2e9807",
+        "version" : "0.27.0"
       }
     },
     {

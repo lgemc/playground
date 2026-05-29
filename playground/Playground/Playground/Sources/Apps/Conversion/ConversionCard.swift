@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 #if canImport(UIKit)
 import UIKit
@@ -12,6 +13,8 @@ struct ConversionCard: View {
     @State private var outputImage: PlatformImage? = nil
     @State private var inputImage: PlatformImage? = nil
     @State private var navigateToFileId: String? = nil
+    @State private var isPlaying: Bool = false
+    @State private var audioPlayer: AVAudioPlayer? = nil
 
     private let fileStorage = FileStorage.shared
 
@@ -96,14 +99,13 @@ struct ConversionCard: View {
                 Button {
                     navigateToFileId = fileId
                 } label: {
-                    filePreview(fileId: fileId, image: inputImage)
+                    filePreview(fileId: fileId, image: inputImage, inputText: nil)
                 }
                 .buttonStyle(.plain)
             } else if let text = conversion.inputText, !text.isEmpty {
                 Text(text)
                     .font(.body)
                     .foregroundColor(.primary)
-                    .lineLimit(5)
                     .textSelection(.enabled)
             } else {
                 Text("[No input]")
@@ -127,15 +129,35 @@ struct ConversionCard: View {
                 .fontWeight(.semibold)
 
             if let fileId = conversion.outputFileId {
-                Button {
-                    navigateToFileId = fileId
-                } label: {
-                    filePreview(fileId: fileId, image: outputImage)
+                // Check if it's an audio file
+                let fileResult = fileStorage.getFile(id: fileId)
+                if case .ok(let file) = fileResult, let file = file, isAudioFile(file) {
+                    // For audio files, don't make the whole card clickable (only play button works)
+                    filePreview(fileId: fileId, image: outputImage, inputText: conversion.inputText)
+                } else {
+                    // For non-audio files, allow navigation
+                    Button {
+                        navigateToFileId = fileId
+                    } label: {
+                        filePreview(fileId: fileId, image: outputImage, inputText: conversion.inputText)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             } else if let text = conversion.outputText, !text.isEmpty {
-                MarkdownText(content: text, textColor: .primary)
-                    .lineLimit(5)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(previewText(from: text))
+                        .font(.body)
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+
+                    if text.count > 150 {
+                        Text("Tap to view full content...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .italic()
+                    }
+                }
             } else {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -153,18 +175,165 @@ struct ConversionCard: View {
         .cornerRadius(12)
     }
 
+    // MARK: - Audio Playback
+
+    private func isAudioFile(_ file: File) -> Bool {
+        let ext = file.fileExtension.lowercased()
+        return ext == "m4a" || ext == "mp3" || ext == "wav" || ext == "aac"
+    }
+
+    private func togglePlayAudio(file: File) {
+        if isPlaying {
+            stopAudio()
+        } else {
+            playAudio(file: file)
+        }
+    }
+
+    private func playAudio(file: File) {
+        do {
+            // Configure audio session
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .default)
+            try audioSession.setActive(true)
+
+            let url = URL(fileURLWithPath: file.absolutePath)
+
+            // Check if file exists
+            guard FileManager.default.fileExists(atPath: file.absolutePath) else {
+                print("❌ Audio file not found: \(file.absolutePath)")
+                return
+            }
+
+            print("🔊 Playing audio from: \(file.absolutePath)")
+            audioPlayer = try AVAudioPlayer(contentsOf: url)
+            audioPlayer?.prepareToPlay()
+
+            guard let player = audioPlayer else {
+                print("❌ Failed to create audio player")
+                return
+            }
+
+            let success = player.play()
+            if success {
+                isPlaying = true
+                print("✅ Audio started playing (duration: \(player.duration)s)")
+
+                // Auto-stop when done
+                DispatchQueue.main.asyncAfter(deadline: .now() + player.duration + 0.5) {
+                    self.isPlaying = false
+                }
+            } else {
+                print("❌ Failed to start audio playback")
+            }
+        } catch {
+            print("❌ Failed to play audio: \(error)")
+            isPlaying = false
+        }
+    }
+
+    private func stopAudio() {
+        audioPlayer?.stop()
+        audioPlayer = nil
+        isPlaying = false
+    }
+
+    // MARK: - Helpers
+
+    private func friendlyFileName(for file: File, inputText: String?) -> String {
+        let ext = file.fileExtension
+
+        // For audio files, create friendly name from input
+        if ext == "m4a" || ext == "mp3" || ext == "wav" {
+            if let input = inputText, !input.isEmpty {
+                let preview = String(input.prefix(30))
+                return "Audio: \(preview)\(input.count > 30 ? "..." : "").\(ext)"
+            }
+            return "Generated Audio.\(ext)"
+        }
+
+        // For images, create friendly name from input
+        if ext == "png" || ext == "jpg" || ext == "jpeg" {
+            if let input = inputText, !input.isEmpty {
+                let preview = String(input.prefix(30))
+                return "Image: \(preview)\(input.count > 30 ? "..." : "").\(ext)"
+            }
+            return "Generated Image.\(ext)"
+        }
+
+        // For other files, use original name
+        return file.name
+    }
+
+    private func previewText(from text: String) -> String {
+        // Strip markdown and LaTeX for preview
+        var preview = text
+
+        // Remove LaTeX formulas (display mode $$...$$)
+        preview = preview.replacing(/\$\$[^\$]+\$\$/) { _ in "[formula]" }
+
+        // Remove LaTeX formulas (inline mode $...$)
+        preview = preview.replacing(/\$[^\$]+\$/) { _ in "[math]" }
+
+        // Remove markdown bold **text**
+        preview = preview.replacing(/\*\*([^\*]+)\*\*/) { match in
+            String(match.output.1)
+        }
+
+        // Remove markdown italic *text*
+        preview = preview.replacing(/\*([^\*]+)\*/) { match in
+            String(match.output.1)
+        }
+
+        // Remove markdown code `text`
+        preview = preview.replacing(/`([^`]+)`/) { match in
+            String(match.output.1)
+        }
+
+        // Collapse multiple newlines
+        preview = preview.replacing(/\n+/) { _ in " " }
+
+        // Trim and truncate
+        preview = preview.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if preview.count > 150 {
+            let index = preview.index(preview.startIndex, offsetBy: 147)
+            preview = String(preview[..<index]) + "..."
+        }
+
+        return preview
+    }
+
     @ViewBuilder
-    private func filePreview(fileId: String, image: PlatformImage?) -> some View {
+    private func filePreview(fileId: String, image: PlatformImage?, inputText: String?) -> some View {
         let fileResult = fileStorage.getFile(id: fileId)
         if case .ok(let file) = fileResult, let file = file {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Image(systemName: file.iconName)
                         .foregroundColor(.blue)
-                    Text(file.name)
+
+                    // Show friendly name instead of raw filename
+                    Text(friendlyFileName(for: file, inputText: inputText))
                         .font(.body)
                         .lineLimit(1)
+
                     Spacer()
+
+                    // Play button for audio files
+                    if isAudioFile(file) {
+                        Button(action: {
+                            togglePlayAudio(file: file)
+                        }) {
+                            Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                                .foregroundColor(.white)
+                                .frame(width: 32, height: 32)
+                                .background(isPlaying ? Color.red : Color.blue)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     if let size = file.sizeBytes {
                         Text(file.formattedSize)
                             .font(.caption)

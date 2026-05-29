@@ -12,10 +12,7 @@ class MLXTTSService {
     // MARK: - Text-to-Speech
 
     /// Generate speech from text (non-streaming)
-    /// Returns audio data in M4A format
-    ///
-    /// This is a HACKY implementation that speaks and records with microphone.
-    /// For proper silent generation, install mlx-audio-swift package.
+    /// Returns audio data in M4A format using AVSpeechSynthesizer.write()
     @MainActor
     func synthesize(text: String,
                    model: MLXModelConfig.TTSModel? = nil,
@@ -23,7 +20,7 @@ class MLXTTSService {
                    language: String? = nil,
                    speed: Double = 1.0) async throws -> Data {
 
-        print("⚠️ Generating audio with AVSpeechSynthesizer + recording (AUDIBLE)")
+        print("✅ Generating audio with AVSpeechSynthesizer.write() (SILENT)")
 
         let synthesizer = AVSpeechSynthesizer()
         let utterance = AVSpeechUtterance(string: text)
@@ -37,72 +34,93 @@ class MLXTTSService {
 
         utterance.rate = Float(speed * 0.5)
 
-        // Create temporary file
-        let tempURL = FileManager.default.temporaryDirectory
+        // Create temporary CAF file (uncompressed PCM)
+        let cafURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("m4a")
+            .appendingPathExtension("caf")
 
         return try await withCheckedThrowingContinuation { continuation in
             var hasResumed = false
-            var recorder: AVAudioRecorder?
+            var audioFile: AVAudioFile?
+            var bufferCount = 0
 
-            // Setup audio session
-            do {
-                let audioSession = AVAudioSession.sharedInstance()
-                try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-                try audioSession.setActive(true)
-
-                // Setup recorder
-                let settings: [String: Any] = [
-                    AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                    AVSampleRateKey: 44100.0,
-                    AVNumberOfChannelsKey: 1,
-                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-                ]
-
-                recorder = try AVAudioRecorder(url: tempURL, settings: settings)
-                recorder?.prepareToRecord()
-                recorder?.record()
-
-            } catch {
-                if !hasResumed {
-                    hasResumed = true
-                    continuation.resume(throwing: error)
+            synthesizer.write(utterance) { (buffer: AVAudioBuffer) in
+                // Cast to PCM buffer
+                guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
+                    return
                 }
-                return
-            }
 
-            // Create delegate
-            let delegate = SpeechDelegate {
-                guard !hasResumed else { return }
-
-                // Wait a bit for speech to finish
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    guard !hasResumed else { return }
-
-                    recorder?.stop()
-                    try? AVAudioSession.sharedInstance().setActive(false)
-
-                    do {
-                        let audioData = try Data(contentsOf: tempURL)
-                        try? FileManager.default.removeItem(at: tempURL)
-
+                // Check if this is an empty buffer (completion signal)
+                if pcmBuffer.frameLength == 0 {
+                    if !hasResumed {
                         hasResumed = true
-                        continuation.resume(returning: audioData)
-                    } catch {
+                        print("✅ Wrote \(bufferCount) audio buffers to CAF")
+
+                        Task {
+                            do {
+                                // Convert CAF to M4A
+                                let m4aURL = cafURL.deletingPathExtension().appendingPathExtension("m4a")
+                                try await self.convertCAFToM4A(from: cafURL, to: m4aURL)
+
+                                let audioData = try Data(contentsOf: m4aURL)
+                                try? FileManager.default.removeItem(at: cafURL)
+                                try? FileManager.default.removeItem(at: m4aURL)
+
+                                print("✅ Successfully converted to M4A (\(audioData.count) bytes)")
+                                continuation.resume(returning: audioData)
+                            } catch {
+                                print("❌ Conversion failed: \(error)")
+                                continuation.resume(throwing: error)
+                            }
+                        }
+                    }
+                    return
+                }
+
+                // Write buffer to CAF file (uncompressed)
+                do {
+                    if audioFile == nil {
+                        audioFile = try AVAudioFile(
+                            forWriting: cafURL,
+                            settings: pcmBuffer.format.settings
+                        )
+                        print("📝 Created CAF file: sampleRate=\(pcmBuffer.format.sampleRate), channels=\(pcmBuffer.format.channelCount)")
+                    }
+                    try audioFile?.write(from: pcmBuffer)
+                    bufferCount += 1
+                } catch {
+                    if !hasResumed {
                         hasResumed = true
+                        print("❌ Failed to write audio buffer: \(error)")
                         continuation.resume(throwing: error)
                     }
                 }
             }
-
-            synthesizer.delegate = delegate
-            synthesizer.speak(utterance)
-
-            // Keep objects alive
-            objc_setAssociatedObject(synthesizer, "delegate", delegate, .OBJC_ASSOCIATION_RETAIN)
-            objc_setAssociatedObject(synthesizer, "recorder", recorder, .OBJC_ASSOCIATION_RETAIN)
         }
+    }
+
+    /// Convert CAF (uncompressed) to M4A (compressed AAC)
+    private func convertCAFToM4A(from cafURL: URL, to m4aURL: URL) async throws {
+        let asset = AVURLAsset(url: cafURL)
+
+        guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw MLXTTSError.synthesizeFailed
+        }
+
+        exportSession.outputURL = m4aURL
+        exportSession.outputFileType = .m4a
+
+        await exportSession.export()
+
+        guard exportSession.status == .completed else {
+            if let error = exportSession.error {
+                print("❌ Export failed: \(error)")
+                throw error
+            }
+            throw MLXTTSError.synthesizeFailed
+        }
+
+        print("✅ CAF → M4A conversion completed")
     }
 
     /// Generate speech from text and save to file

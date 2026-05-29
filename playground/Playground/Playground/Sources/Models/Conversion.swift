@@ -10,6 +10,8 @@ struct Conversion: Codable, Identifiable {
     var outputText: String?
     var outputFileId: String?
     var metadata: [String: String]
+    var isFavorite: Bool
+    var label: String?
     var createdAt: Date
     var updatedAt: Date
 
@@ -20,6 +22,8 @@ struct Conversion: Codable, Identifiable {
          outputText: String? = nil,
          outputFileId: String? = nil,
          metadata: [String: String] = [:],
+         isFavorite: Bool = false,
+         label: String? = nil,
          createdAt: Date = Date(),
          updatedAt: Date = Date()) {
         self.id = id
@@ -29,6 +33,8 @@ struct Conversion: Codable, Identifiable {
         self.outputText = outputText
         self.outputFileId = outputFileId
         self.metadata = metadata
+        self.isFavorite = isFavorite
+        self.label = label
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -46,6 +52,8 @@ extension Conversion: FetchableRecord, PersistableRecord {
         static let outputText = Column("output_text")
         static let outputFileId = Column("output_file_id")
         static let metadata = Column("metadata")
+        static let isFavorite = Column("is_favorite")
+        static let label = Column("label")
         static let createdAt = Column("created_at")
         static let updatedAt = Column("updated_at")
     }
@@ -70,6 +78,8 @@ extension Conversion: FetchableRecord, PersistableRecord {
         container["input_file_id"] = inputFileId
         container["output_text"] = outputText
         container["output_file_id"] = outputFileId
+        container["is_favorite"] = isFavorite
+        container["label"] = label
         container["created_at"] = createdAt
         container["updated_at"] = updatedAt
 

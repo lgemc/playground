@@ -18,11 +18,12 @@ class ConversionService {
     // MARK: - Conversion Execution
 
     /// Perform a conversion and save to storage
+    /// Returns the conversion and the chat ID (if created)
     func convert(
         type: ConversionType,
         inputText: String? = nil,
         inputFileURL: URL? = nil
-    ) async throws -> Conversion {
+    ) async throws -> (conversion: Conversion, chatId: String?) {
         // Create initial conversion record
         var inputFileId: String? = nil
 
@@ -46,21 +47,26 @@ class ConversionService {
             throw ConversionError.storageFailed(error)
         }
 
-        // Perform the actual conversion asynchronously
-        Task {
-            do {
-                try await performConversion(conversion: conversion)
-            } catch {
-                print("❌ Conversion failed: \(error)")
-                // Update with error in metadata
-                try? updateConversionStorage(
-                    id: conversion.id,
-                    metadata: ["error": error.localizedDescription]
-                )
-            }
-        }
+        // Perform the actual conversion synchronously and wait for chat creation
+        do {
+            try await performConversion(conversion: conversion)
 
-        return conversion
+            // Get the updated conversion with chat_id
+            if let updated = getConversion(id: conversion.id),
+               let chatId = updated.metadata["chat_id"] {
+                return (updated, chatId)
+            }
+
+            return (conversion, nil)
+        } catch {
+            print("❌ Conversion failed: \(error)")
+            // Update with error in metadata
+            try? updateConversionStorage(
+                id: conversion.id,
+                metadata: ["error": error.localizedDescription]
+            )
+            throw error
+        }
     }
 
     /// Perform a streaming conversion (for text-to-text)
@@ -358,10 +364,18 @@ class ConversionService {
         // Transcribe with Whisper
         let response = try await mlx.whisper.transcribe(audioURL: URL(fileURLWithPath: file.absolutePath))
 
+        // Store segments as JSON for timestamp display later
+        var metadata: [String: String] = ["model": "mlx_whisper"]
+        if let segments = response.segments,
+           let segmentsData = try? JSONEncoder().encode(segments),
+           let segmentsJson = String(data: segmentsData, encoding: .utf8) {
+            metadata["segments"] = segmentsJson
+        }
+
         try updateConversionStorage(
             id: conversion.id,
             outputText: response.text,
-            metadata: ["model": "mlx_whisper"]
+            metadata: metadata
         )
     }
 
@@ -379,10 +393,19 @@ class ConversionService {
         // Transcribe video with Whisper
         let response = try await mlx.whisper.transcribe(audioURL: URL(fileURLWithPath: file.absolutePath))
 
+        // Store segments as JSON for timestamp display later
+        var metadata: [String: String] = ["model": "mlx_whisper"]
+        if let segments = response.segments,
+           let segmentsData = try? JSONEncoder().encode(segments),
+           let segmentsJson = String(data: segmentsData, encoding: .utf8) {
+            metadata["segments"] = segmentsJson
+            metadata["input_file_id"] = fileId  // Store file ID so we can link to video playback
+        }
+
         try updateConversionStorage(
             id: conversion.id,
             outputText: response.text,
-            metadata: ["model": "mlx_whisper"]
+            metadata: metadata
         )
     }
 

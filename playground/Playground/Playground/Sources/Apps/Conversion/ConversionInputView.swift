@@ -57,9 +57,7 @@ struct ConversionInputView: View {
                 // Streaming output (if applicable)
                 if isConverting && selectedType == .textToText && !streamingOutput.isEmpty {
                     Section {
-                        Text(streamingOutput)
-                            .font(.body)
-                            .foregroundColor(.primary)
+                        MarkdownText(content: streamingOutput, textColor: .primary)
                             .textSelection(.enabled)
                     } header: {
                         HStack {
@@ -209,13 +207,14 @@ struct ConversionInputView: View {
                     }
                 } else {
                     // Non-streaming conversion
-                    _ = try await conversionService.convert(
+                    let (_, chatId) = try await conversionService.convert(
                         type: selectedType,
                         inputText: inputText.isEmpty ? nil : inputText,
                         inputFileURL: selectedFileURL
                     )
 
                     isConverting = false
+                    navigateToChatId = chatId
                     dismiss()
                 }
             } catch {

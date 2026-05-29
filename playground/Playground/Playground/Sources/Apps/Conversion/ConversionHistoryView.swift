@@ -193,6 +193,7 @@ struct ConversionHistoryView: View {
         do {
             try conversionService.deleteConversion(id: conversion.id)
             conversions.removeAll { $0.id == conversion.id }
+            filterConversions() // Update filtered list
         } catch {
             print("❌ Failed to delete conversion: \(error)")
         }

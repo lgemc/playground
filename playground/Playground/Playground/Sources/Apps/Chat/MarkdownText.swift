@@ -1,7 +1,17 @@
 import SwiftUI
+import LaTeXSwiftUI
 
 /// Lightweight custom markdown renderer optimized for chat messages
-/// Supports: **bold**, *italic*, `inline code`, ```code blocks```, [links](url), and lists
+///
+/// Supports:
+/// - **bold**, *italic*, `inline code`
+/// - ```code blocks``` with syntax highlighting
+/// - [links](url)
+/// - Bullet and numbered lists
+/// - Tables with alignment
+/// - LaTeX math equations:
+///   - Inline: $x_i$ or $\sum_{i=1}^n x_i$
+///   - Display: $$\int_0^1 f(x) dx$$
 struct MarkdownText: View {
     let content: String
     let textColor: Color
@@ -136,13 +146,13 @@ struct MarkdownText: View {
                 // Headings: # H1, ## H2, ### H3, etc.
                 if trimmedLine.hasPrefix("#") {
                     if let headingData = parseHeading(lineStr) {
-                        parseInlineText(headingData.text, textColor: textColor)
+                        renderInlineWithLatex(headingData.text, textColor: textColor)
                             .font(headingData.font)
                             .bold()
                             .padding(.top, headingData.level == 1 ? 8 : 4)
                             .padding(.bottom, 2)
                     } else {
-                        parseInlineText(lineStr, textColor: textColor)
+                        renderInlineWithLatex(lineStr, textColor: textColor)
                     }
                 } else if trimmedLine.hasPrefix("- ") || trimmedLine.hasPrefix("* ") || trimmedLine.hasPrefix("+ ") {
                     // Bullet list (with indentation support for sub-points)
@@ -154,7 +164,7 @@ struct MarkdownText: View {
                         }
                         Text(indentLevel > 0 ? "◦" : "•")  // Hollow bullet for sub-items
                             .foregroundColor(textColor)
-                        parseInlineText(String(trimmedLine.dropFirst(2)), textColor: textColor)
+                        renderInlineWithLatex(String(trimmedLine.dropFirst(2)), textColor: textColor)
                         Spacer()  // Push content to leading edge
                     }
                 } else if let numberMatch = trimmedLine.firstMatch(of: /^(\d+)\.\s+(.*)/) {
@@ -167,14 +177,124 @@ struct MarkdownText: View {
                         }
                         Text("\(numberMatch.1).")
                             .foregroundColor(textColor)
-                        parseInlineText(String(numberMatch.2), textColor: textColor)
+                        renderInlineWithLatex(String(numberMatch.2), textColor: textColor)
                         Spacer()
                     }
                 } else {
-                    parseInlineText(lineStr, textColor: textColor)
+                    renderInlineWithLatex(lineStr, textColor: textColor)
                 }
             }
         }
+    }
+
+    // MARK: - Inline Rendering with LaTeX Support
+
+    /// Renders text with both markdown and LaTeX support
+    private static func renderInlineWithLatex(_ text: String, textColor: Color) -> some View {
+        // First check if text contains any LaTeX ($ delimiters)
+        if !text.contains("$") {
+            // No LaTeX, use fast path with Text only
+            return AnyView(parseInlineText(text, textColor: textColor))
+        }
+
+        print("🔍 MarkdownText: Detected $ in text, parsing LaTeX...")
+        print("🔍 Text preview: \(String(text.prefix(200)))")
+
+        // Parse text into segments (Text and LaTeX)
+        let segments = parseInlineSegments(text, textColor: textColor)
+        print("🔍 Parsed \(segments.count) segments")
+
+        return AnyView(
+            HStack(alignment: .center, spacing: 0) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    segment
+                }
+            }
+        )
+    }
+
+    enum InlineSegment {
+        case text(Text)
+        case latex(String)
+    }
+
+    /// Parses text into alternating Text and LaTeX segments
+    private static func parseInlineSegments(_ text: String, textColor: Color) -> [AnyView] {
+        var segments: [AnyView] = []
+        var currentText = ""
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let char = text[index]
+
+            // Check for LaTeX: $...$ (inline math)
+            if char == "$" {
+                let remaining = String(text[index...])
+
+                // Check for display math $$...$$
+                if remaining.hasPrefix("$$") {
+                    // Find closing $$
+                    if let endRange = findClosingPattern(in: remaining, pattern: "$$", startOffset: 2) {
+                        // Flush current text
+                        if !currentText.isEmpty {
+                            segments.append(AnyView(parseInlineText(currentText, textColor: textColor)))
+                            currentText = ""
+                        }
+
+                        // Extract LaTeX content (wrap in $$ for display mode)
+                        let latexContent = String(remaining[remaining.index(remaining.startIndex, offsetBy: 2)..<endRange])
+
+                        // Add LaTeX view (display mode)
+                        segments.append(AnyView(
+                            VStack {
+                                LaTeX("$$" + latexContent + "$$")
+                                    .parsingMode(.all)
+                                    .errorMode(.error)
+                                    .blockMode(.blockViews)
+                            }
+                            .padding(.vertical, 4)
+                        ))
+
+                        index = text.index(index, offsetBy: latexContent.count + 4)
+                        continue
+                    }
+                }
+                // Check for inline math $...$
+                else if let endRange = findClosingPattern(in: remaining, pattern: "$", startOffset: 1) {
+                    // Flush current text
+                    if !currentText.isEmpty {
+                        segments.append(AnyView(parseInlineText(currentText, textColor: textColor)))
+                        currentText = ""
+                    }
+
+                    // Extract LaTeX content (wrap in $ for inline mode)
+                    let latexContent = String(remaining[remaining.index(remaining.startIndex, offsetBy: 1)..<endRange])
+
+                    print("🔍 Found inline LaTeX: $\(latexContent)$")
+
+                    // Add LaTeX view (inline mode)
+                    segments.append(AnyView(
+                        LaTeX("$" + latexContent + "$")
+                            .parsingMode(.all)
+                            .errorMode(.error)
+                            .blockMode(.alwaysInline)
+                    ))
+
+                    index = text.index(index, offsetBy: latexContent.count + 2)
+                    continue
+                }
+            }
+
+            currentText.append(char)
+            index = text.index(after: index)
+        }
+
+        // Flush remaining text
+        if !currentText.isEmpty {
+            segments.append(AnyView(parseInlineText(currentText, textColor: textColor)))
+        }
+
+        return segments
     }
 
     private static func parseInlineText(_ text: String, textColor: Color) -> Text {
@@ -415,7 +535,7 @@ struct MarkdownText: View {
             swiftUIAlignment = .trailing
         }
 
-        return parseInlineText(content, textColor: textColor)
+        return renderInlineWithLatex(content, textColor: textColor)
             .font(isHeader ? .body.bold() : .body)
             .frame(minWidth: 80, maxWidth: 300, alignment: swiftUIAlignment)
             .padding(.horizontal, 12)
