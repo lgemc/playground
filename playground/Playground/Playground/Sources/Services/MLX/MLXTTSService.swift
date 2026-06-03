@@ -272,26 +272,3 @@ enum MLXTTSError: Error {
     case playbackFailed
 }
 
-// MARK: - Note on Future Integration
-
-/*
- TODO: Use MLXAudioTTSService for native on-device TTS
-
- MLXAudioTTSService provides high-quality neural text-to-speech using mlx-audio-swift:
-
- import MLXAudioTTS
-
- let audioData = try await MLXAudioTTSService.shared.synthesize(
-     text: text,
-     model: .fishAudio,  // Fish Audio S2 Pro (#1 ranked open-weight TTS)
-     voice: "en-US-Standard-A",
-     language: "en"
- )
-
- Benefits:
- - Fish Audio S2 Pro: #1 ranked open-weight TTS (Elo 1123)
- - Natural, human-like voices
- - Offline support with mlx-community models
- - Fast generation on Apple Silicon
- - Supports multiple languages and voices
- */
