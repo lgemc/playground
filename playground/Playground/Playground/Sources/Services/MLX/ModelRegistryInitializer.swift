@@ -74,7 +74,7 @@ actor ModelRegistryInitializer {
 
     private func registerTTSModels() async throws {
         let ttsModels: [(id: String, name: String, sizeMB: Int)] = [
-            ("mlx-community/kokoro-82m", "Kokoro 82M", 350),
+            ("mlx-community/fish-audio-s2-pro-8bit", "Fish Audio S2 Pro", 300),
             ("mlx-community/qwen3-tts", "Qwen 3 TTS", 800),
             ("mlx-community/cosyvoice-300m-sft", "CosyVoice 300M SFT", 600)
         ]

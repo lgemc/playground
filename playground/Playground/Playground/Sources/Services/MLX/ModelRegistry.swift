@@ -32,58 +32,79 @@ actor ModelRegistry {
     static let shared = ModelRegistry()
 
     private var db: OpaquePointer?
+    private var isInitialized = false
     private let dbQueue = DispatchQueue(label: "com.playground.modelregistry", qos: .userInitiated)
 
     private init() {
-        Task {
-            await initializeDatabase()
-        }
+        // Don't initialize in init - let first caller trigger it
     }
 
     // MARK: - Database Initialization
 
-    private func initializeDatabase() async {
-        do {
-            let dbPath = try getDatabasePath()
+    private func ensureInitialized() async throws {
+        guard !isInitialized else { return }
+        try await initializeDatabase()
+        isInitialized = true
+    }
 
-            // Open database
-            if sqlite3_open(dbPath, &db) != SQLITE_OK {
-                print("Error opening model registry database")
-                return
-            }
+    private func initializeDatabase() async throws {
+        let dbPath = try getDatabasePath()
 
-            // Create table
-            let createTableSQL = """
-            CREATE TABLE IF NOT EXISTS mlx_models (
-                id TEXT PRIMARY KEY,
-                model_id TEXT NOT NULL,
-                type TEXT NOT NULL,
-                name TEXT NOT NULL,
-                size_mb INTEGER,
-                is_downloaded INTEGER DEFAULT 0,
-                download_progress REAL,
-                download_started_at TEXT,
-                download_completed_at TEXT,
-                last_used_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+        // Open database
+        guard sqlite3_open(dbPath, &db) == SQLITE_OK else {
+            throw NSError(domain: "ModelRegistry", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to open database"])
+        }
+
+        // Create table
+        let createTableSQL = """
+        CREATE TABLE IF NOT EXISTS mlx_models (
+            id TEXT PRIMARY KEY,
+            model_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            size_mb INTEGER,
+            is_downloaded INTEGER DEFAULT 0,
+            download_progress REAL,
+            download_started_at TEXT,
+            download_completed_at TEXT,
+            last_used_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+
+        guard sqlite3_exec(db, createTableSQL, nil, nil, nil) == SQLITE_OK else {
+            let errmsg = String(cString: sqlite3_errmsg(db)!)
+            throw NSError(domain: "ModelRegistry", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create table: \(errmsg)"])
+        }
+
+        // Drop old non-unique index if it exists and create unique one
+        sqlite3_exec(db, "DROP INDEX IF EXISTS idx_model_id", nil, nil, nil)
+
+        // Try to create unique index - if it fails due to duplicates, clean them up
+        let createIndexSQL = "CREATE UNIQUE INDEX idx_model_id ON mlx_models(model_id)"
+        if sqlite3_exec(db, createIndexSQL, nil, nil, nil) != SQLITE_OK {
+            // Index creation failed - likely due to duplicate model_ids
+            // Clean up duplicates by keeping only the first entry for each model_id
+            print("⚠️ Cleaning up duplicate model_id entries...")
+            let cleanupSQL = """
+            DELETE FROM mlx_models
+            WHERE rowid NOT IN (
+                SELECT MIN(rowid)
+                FROM mlx_models
+                GROUP BY model_id
             )
             """
+            sqlite3_exec(db, cleanupSQL, nil, nil, nil)
 
-            if sqlite3_exec(db, createTableSQL, nil, nil, nil) != SQLITE_OK {
+            // Try creating unique index again
+            if sqlite3_exec(db, createIndexSQL, nil, nil, nil) != SQLITE_OK {
                 let errmsg = String(cString: sqlite3_errmsg(db)!)
-                print("Error creating mlx_models table: \(errmsg)")
-                return
+                throw NSError(domain: "ModelRegistry", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to create unique index: \(errmsg)"])
             }
-
-            // Create index on model_id for faster lookups
-            let createIndexSQL = "CREATE INDEX IF NOT EXISTS idx_model_id ON mlx_models(model_id)"
-            sqlite3_exec(db, createIndexSQL, nil, nil, nil)
-
-            print("ModelRegistry: Database initialized at \(dbPath)")
-        } catch {
-            print("Error initializing model registry database: \(error)")
         }
+
+        print("ModelRegistry: Database initialized at \(dbPath)")
     }
 
     private func getDatabasePath() throws -> String {
@@ -108,18 +129,26 @@ actor ModelRegistry {
         name: String,
         sizeMB: Int? = nil
     ) async throws {
+        try await ensureInitialized()
+
         let now = ISO8601DateFormatter().string(from: Date())
 
+        // Use INSERT with ON CONFLICT to preserve is_downloaded
+        // COALESCE keeps existing is_downloaded value, defaults to 0 for new rows
         let sql = """
-        INSERT OR REPLACE INTO mlx_models
-        (id, model_id, type, name, size_mb, is_downloaded, created_at, updated_at)
+        INSERT INTO mlx_models (id, model_id, type, name, size_mb, is_downloaded, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+        ON CONFLICT(model_id) DO UPDATE SET
+            name = excluded.name,
+            size_mb = excluded.size_mb,
+            type = excluded.type,
+            updated_at = excluded.updated_at
         """
 
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             let errmsg = String(cString: sqlite3_errmsg(db)!)
-            throw NSError(domain: "ModelRegistry", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to prepare statement: \(errmsg)"])
+            throw NSError(domain: "ModelRegistry", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to prepare: \(errmsg)"])
         }
 
         defer { sqlite3_finalize(stmt) }
@@ -136,11 +165,13 @@ actor ModelRegistry {
 
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             let errmsg = String(cString: sqlite3_errmsg(db)!)
-            throw NSError(domain: "ModelRegistry", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to insert model: \(errmsg)"])
+            throw NSError(domain: "ModelRegistry", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to execute: \(errmsg)"])
         }
     }
 
     func markAsDownloaded(modelId: String, sizeMB: Int) async throws {
+        try await ensureInitialized()
+
         let now = ISO8601DateFormatter().string(from: Date())
 
         let sql = """
@@ -170,6 +201,8 @@ actor ModelRegistry {
     }
 
     func updateLastUsed(modelId: String) async throws {
+        try await ensureInitialized()
+
         let now = ISO8601DateFormatter().string(from: Date())
 
         let sql = "UPDATE mlx_models SET last_used_at = ?, updated_at = ? WHERE model_id = ?"
@@ -189,6 +222,8 @@ actor ModelRegistry {
     }
 
     func getAllModels() async throws -> [RegisteredModel] {
+        try await ensureInitialized()
+
         var models: [RegisteredModel] = []
 
         let sql = "SELECT * FROM mlx_models ORDER BY last_used_at DESC, name ASC"
@@ -230,8 +265,8 @@ actor ModelRegistry {
                 return dateFormatter.date(from: String(cString: text))
             }()
 
-            let createdAt = dateFormatter.date(from: String(cString: sqlite3_column_text(stmt, 10)))!
-            let updatedAt = dateFormatter.date(from: String(cString: sqlite3_column_text(stmt, 11)))!
+            let createdAt = dateFormatter.date(from: String(cString: sqlite3_column_text(stmt, 10))) ?? Date()
+            let updatedAt = dateFormatter.date(from: String(cString: sqlite3_column_text(stmt, 11))) ?? Date()
 
             let model = RegisteredModel(
                 id: id,
@@ -260,6 +295,8 @@ actor ModelRegistry {
     }
 
     func deleteModel(modelId: String) async throws {
+        try await ensureInitialized()
+
         // Delete from database
         let sql = "DELETE FROM mlx_models WHERE model_id = ?"
 
@@ -318,6 +355,8 @@ actor ModelRegistry {
     }
 
     func getModelByModelId(modelId: String) async throws -> RegisteredModel? {
+        try await ensureInitialized()
+
         let sql = "SELECT * FROM mlx_models WHERE model_id = ? LIMIT 1"
 
         var stmt: OpaquePointer?

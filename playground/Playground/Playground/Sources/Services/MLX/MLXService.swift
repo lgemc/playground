@@ -47,7 +47,7 @@ class MLXService {
         // qwen3_5_2b_6bit = ~1.6GB (262K context, multimodal)
         config.defineConfig(key: "mlx.chat_model", value: MLXModelConfig.ChatModel.qwen3_5_2b_6bit.rawValue)
         config.defineConfig(key: "mlx.whisper_model", value: MLXModelConfig.WhisperModel.small.rawValue)
-        config.defineConfig(key: "mlx.tts_model", value: MLXModelConfig.TTSModel.kokoro.rawValue)
+        config.defineConfig(key: "mlx.tts_model", value: MLXModelConfig.TTSModel.fishAudio.rawValue)
         config.defineConfig(key: "mlx.image_model", value: MLXModelConfig.ImageModel.sdxlTurbo.rawValue)
 
         // Fallback to OpenAI API if model loading fails
@@ -87,6 +87,38 @@ class MLXService {
     func chatComplete(messages: [AutocompletionService.ChatMessage],
                      temperature: Double? = nil,
                      maxTokens: Int? = nil) async throws -> String {
+
+        // Check permission before downloading model
+        let chatModelId: String? = config.getConfig(key: "mlx.chat_model")
+        let modelId = chatModelId ?? MLXModelConfig.ChatModel.qwen3_5_2b_6bit.rawValue
+
+        if !ModelPermissionService.shared.isApproved(modelId: modelId) {
+            // Request permission on main thread
+            let approved = await MainActor.run {
+                MLXModelDownloadHelper.shared.checkPermission(
+                    modelId: modelId,
+                    modelType: "chat",
+                    estimatedSizeMB: MLXModelConfig.ChatModel.qwen3_5_2b_6bit.estimatedMemoryMB,
+                    onApproved: {},
+                    onDenied: {}
+                )
+            }
+
+            if !approved {
+                // Fall back to OpenAI if permission denied
+                if config.getBool(key: "mlx.fallback_to_openai", default: true) {
+                    print("Model download not approved, falling back to OpenAI API...")
+                    let result = await AutocompletionService.shared.complete(
+                        messages: messages,
+                        temperature: temperature,
+                        maxTokens: maxTokens
+                    )
+                    return try result.get()
+                } else {
+                    throw NSError(domain: "MLXService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Model download not approved"])
+                }
+            }
+        }
 
         // Try MLX first
         do {

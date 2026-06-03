@@ -18,6 +18,8 @@
 		AD46D28A2F55FC4D008EF85F /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08A2F560000008EF85F /* MLXAudioTTS */; };
 		AD46D28B2F55FC4D008EF85F /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08B2F560000008EF85F /* MLXAudioCore */; };
 		ADEBCE452FC9303500D95529 /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = ADEBCE442FC9303500D95529 /* LaTeXSwiftUI */; };
+		AD46D28C2F55FC4D008EF85F /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08C2F560000008EF85F /* MLXHuggingFace */; };
+		AD46D28D2F55FC4D008EF85F /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = AD46D08D2F560000008EF85F /* Tokenizers */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +50,8 @@
 				AD46D2822F55FC4D008EF85F /* GRDB in Frameworks */,
 				AD46D28A2F55FC4D008EF85F /* MLXAudioTTS in Frameworks */,
 				AD46D28B2F55FC4D008EF85F /* MLXAudioCore in Frameworks */,
+				AD46D28C2F55FC4D008EF85F /* MLXHuggingFace in Frameworks */,
+				AD46D28D2F55FC4D008EF85F /* Tokenizers in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,6 +105,8 @@
 				AD46D08A2F560000008EF85F /* MLXAudioTTS */,
 				AD46D08B2F560000008EF85F /* MLXAudioCore */,
 				ADEBCE442FC9303500D95529 /* LaTeXSwiftUI */,
+				AD46D08C2F560000008EF85F /* MLXHuggingFace */,
+				AD46D08D2F560000008EF85F /* Tokenizers */,
 			);
 			productName = Playground;
 			productReference = AD46D0662F55F1FF008EF85F /* Playground.app */;
@@ -507,6 +513,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = ADEBCE432FC9303500D95529 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */;
 			productName = LaTeXSwiftUI;
+		};
+		AD46D08C2F560000008EF85F /* MLXHuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D0872F560000008EF85F /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXHuggingFace;
+		};
+		AD46D08D2F560000008EF85F /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AD46D08E2F560000008EF85F /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

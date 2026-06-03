@@ -3,11 +3,15 @@ import SwiftUI
 /// View for managing conversion labels
 struct LabelsConfigView: View {
     @State private var labels: [String] = []
+    @State private var labelCounts: [String: Int] = [:]
     @State private var newLabelName: String = ""
     @State private var showingAddLabel = false
     @State private var labelToDelete: String? = nil
+    @Environment(\.dismiss) private var dismiss
 
     private let storage = ConversionStorage.shared
+    private let service = ConversionService.shared
+    var onLabelSelected: ((String) -> Void)? = nil
 
     var body: some View {
         List {
@@ -32,24 +36,35 @@ struct LabelsConfigView: View {
                     .listRowBackground(Color.clear)
                 } else {
                     ForEach(labels, id: \.self) { label in
-                        HStack {
-                            Image(systemName: "tag.fill")
-                                .foregroundColor(.blue)
+                        Button {
+                            // Navigate to conversions filtered by this label
+                            onLabelSelected?(label)
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Image(systemName: "tag.fill")
+                                    .foregroundColor(.blue)
 
-                            Text(label)
-                                .font(.body)
+                                Text(label)
+                                    .font(.body)
+                                    .foregroundColor(.primary)
 
-                            Spacer()
+                                Spacer()
 
-                            // Count of conversions with this label
-                            if let count = getConversionCount(for: label) {
-                                Text("\(count)")
+                                // Count of conversions with this label
+                                if let count = getConversionCount(for: label) {
+                                    Text("\(count)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color(.systemGray5))
+                                        .cornerRadius(8)
+                                }
+
+                                Image(systemName: "chevron.right")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color(.systemGray5))
-                                    .cornerRadius(8)
                             }
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -115,11 +130,14 @@ struct LabelsConfigView: View {
     }
 
     private func loadLabels() {
-        switch storage.getAllLabels() {
-        case .ok(let loadedLabels):
-            labels = loadedLabels
-        case .err(let error):
-            print("❌ Failed to load labels: \(error)")
+        // Get label counts efficiently with single SQL query
+        labelCounts = service.getLabelCounts()
+
+        // Sort labels by count (most to least)
+        labels = labelCounts.keys.sorted { label1, label2 in
+            let count1 = labelCounts[label1] ?? 0
+            let count2 = labelCounts[label2] ?? 0
+            return count1 > count2
         }
     }
 
@@ -141,7 +159,8 @@ struct LabelsConfigView: View {
         // Or we can just add it to the list locally and it will be saved when used
         // For now, let's just create a temporary entry to register the label
         labels.append(label)
-        labels.sort()
+        // Re-sort by count after adding
+        loadLabels()
 
         newLabelName = ""
         print("✅ Added new label: \(label)")
@@ -166,12 +185,7 @@ struct LabelsConfigView: View {
     }
 
     private func getConversionCount(for label: String) -> Int? {
-        switch storage.getConversionsByLabel(label: label) {
-        case .ok(let conversions):
-            return conversions.count
-        case .err:
-            return nil
-        }
+        return labelCounts[label]
     }
 }
 

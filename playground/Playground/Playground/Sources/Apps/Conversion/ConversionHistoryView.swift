@@ -10,12 +10,18 @@ struct ConversionHistoryView: View {
     @State private var isLoading = true
     @State private var selectedFilter: FilterOption = .all
     @State private var availableLabels: [String] = []
+    @State private var labelCounts: [String: Int] = [:]
     @State private var navigateToChatId: String?
     @State private var showingSearch = false
     @State private var selectedView: ViewType = .conversions
+    @State private var currentPage = 0
+    @State private var hasMorePages = true
+    @State private var isLoadingMore = false
+    @State private var showingSettings = false
 
     private let conversionService = ConversionService.shared
     private let conversionStorage = ConversionStorage.shared
+    private let pageSize = 50
 
     enum ViewType {
         case conversions
@@ -56,7 +62,11 @@ struct ConversionHistoryView: View {
                     }
                 }
             } else {
-                LabelsConfigView()
+                LabelsConfigView(onLabelSelected: { label in
+                    // Switch to conversions view and apply the label filter
+                    selectedView = .conversions
+                    selectedFilter = .label(label)
+                })
             }
 
             // Bottom navigation bar or search bar
@@ -68,6 +78,21 @@ struct ConversionHistoryView: View {
         }
         .navigationTitle(selectedView == .conversions ? "AI Conversions" : "Labels")
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            NavigationStack {
+                ConversionSettingsView()
+            }
+        }
+        .modelDownloadPermissionAlert()
         .onChange(of: searchText) { oldValue, newValue in
             filterConversions()
         }
@@ -173,22 +198,28 @@ struct ConversionHistoryView: View {
 
     @ViewBuilder
     private var emptyStateView: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "wand.and.stars")
-                .font(.system(size: 64))
-                .foregroundColor(.secondary)
+        VStack {
+            Spacer()
 
-            VStack(spacing: 8) {
-                Text("No Conversions Yet")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-
-                Text("Tap the + button to create your first AI conversion")
-                    .font(.body)
+            VStack(spacing: 24) {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 64))
                     .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+
+                VStack(spacing: 8) {
+                    Text("No Conversions Yet")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+
+                    Text("Tap the + button to create your first AI conversion")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
             }
+
+            Spacer()
         }
     }
 
@@ -206,6 +237,11 @@ struct ConversionHistoryView: View {
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     .listRowSeparator(.hidden)
                     .onAppear {
+                        // Lazy loading trigger
+                        if conversion == filteredConversions.last && hasMorePages && !isLoadingMore {
+                            loadMoreConversions()
+                        }
+
                         // Auto-refresh if conversion is still processing or streaming
                         if conversion.outputText == nil && conversion.outputFileId == nil {
                             scheduleRefresh(for: conversion)
@@ -221,6 +257,11 @@ struct ConversionHistoryView: View {
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowSeparator(.hidden)
                         .onAppear {
+                            // Lazy loading trigger
+                            if conversion == filteredConversions.last && hasMorePages && !isLoadingMore {
+                                loadMoreConversions()
+                            }
+
                             // Auto-refresh if conversion is still processing or streaming
                             if conversion.outputText == nil && conversion.outputFileId == nil {
                                 scheduleRefresh(for: conversion)
@@ -236,6 +277,16 @@ struct ConversionHistoryView: View {
                 }
             }
 
+            // Loading indicator at the bottom when loading more
+            if isLoadingMore {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                        .padding()
+                    Spacer()
+                }
+                .listRowSeparator(.hidden)
+            }
         }
         .listStyle(.plain)
         .refreshable {
@@ -376,30 +427,59 @@ struct ConversionHistoryView: View {
     }
 
     private func loadConversions() {
-        let loaded = conversionService.getAllConversions()
-        print("📋 Loaded \(loaded.count) conversions from storage")
-        for conv in loaded.prefix(5) {
-            print("  - \(conv.type.displayName): \(conv.id)")
+        // Reset pagination
+        currentPage = 0
+        hasMorePages = true
+
+        // Load first page based on filter
+        let loaded: [Conversion]
+        switch selectedFilter {
+        case .all:
+            loaded = conversionService.getAllConversions(limit: pageSize, offset: 0)
+        case .favorites:
+            loaded = conversionService.getFavorites(limit: pageSize, offset: 0)
+        case .label(let labelName):
+            loaded = conversionService.getConversionsByLabel(label: labelName, limit: pageSize, offset: 0)
         }
+
+        print("📋 Loaded \(loaded.count) conversions from storage (page 0)")
         conversions = loaded
+        hasMorePages = loaded.count == pageSize
         filterConversions()
         isLoading = false
     }
 
-    private func filterConversions() {
-        var filtered = conversions
+    private func loadMoreConversions() {
+        guard !isLoadingMore && hasMorePages else { return }
 
-        // Apply filter
+        isLoadingMore = true
+        currentPage += 1
+
+        // Load next page based on filter
+        let moreConversions: [Conversion]
         switch selectedFilter {
         case .all:
-            break // No filtering
+            moreConversions = conversionService.getAllConversions(limit: pageSize, offset: currentPage * pageSize)
         case .favorites:
-            filtered = filtered.filter { $0.isFavorite }
+            moreConversions = conversionService.getFavorites(limit: pageSize, offset: currentPage * pageSize)
         case .label(let labelName):
-            filtered = filtered.filter { $0.label == labelName }
+            moreConversions = conversionService.getConversionsByLabel(label: labelName, limit: pageSize, offset: currentPage * pageSize)
         }
 
-        // Apply search
+        print("📋 Loaded \(moreConversions.count) more conversions (page \(currentPage))")
+
+        // Append to existing list
+        conversions.append(contentsOf: moreConversions)
+        hasMorePages = moreConversions.count == pageSize
+        filterConversions()
+        isLoadingMore = false
+    }
+
+    private func filterConversions() {
+        // Since we're now filtering at database level, we only apply search here
+        var filtered = conversions
+
+        // Apply search (in-memory for now, can be moved to SQL later)
         if !searchText.isEmpty {
             filtered = filtered.filter { conversion in
                 // Search in input text
@@ -422,10 +502,19 @@ struct ConversionHistoryView: View {
     }
 
     private func loadLabels() {
-        let result = conversionStorage.getAllLabels()
-        if case .ok(let labels) = result {
-            availableLabels = labels
+        // Get label counts efficiently with single SQL query
+        labelCounts = conversionService.getLabelCounts()
+
+        // Sort labels by count (most to least)
+        availableLabels = labelCounts.keys.sorted { label1, label2 in
+            let count1 = labelCounts[label1] ?? 0
+            let count2 = labelCounts[label2] ?? 0
+            return count1 > count2
         }
+    }
+
+    private func getConversionCount(for label: String) -> Int {
+        return labelCounts[label] ?? 0
     }
 
     private func deleteConversion(_ conversion: Conversion) {

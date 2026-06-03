@@ -4,6 +4,8 @@ import MLX
 import MLXNN
 import MLXLLM
 import MLXLMCommon
+import MLXHuggingFace
+import HuggingFace
 import Tokenizers
 
 /// Native MLX-based chat service for on-device LLM inference
@@ -89,7 +91,7 @@ class MLXChatService: ObservableObject {
 
             // Load model from HuggingFace using MLXLLM
             // Note: Cache type and batch parameters are configured via MLX GPU settings
-            let model = try await LLMModelFactory.shared.loadContainer(
+            let model = try await #huggingFaceLoadModelContainer(
                 configuration: .init(id: modelConfig.rawValue)
             )
 

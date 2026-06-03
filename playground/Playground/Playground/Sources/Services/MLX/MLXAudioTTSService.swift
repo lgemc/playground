@@ -11,7 +11,8 @@ class MLXAudioTTSService {
 
     private init() {}
 
-    private var isLoading = false
+    private(set) var isLoading = false
+    private(set) var loadProgress: Double = 0.0
     private var loadTask: Task<Void, Error>?
 
     // MARK: - Installation Instructions
@@ -31,7 +32,7 @@ class MLXAudioTTSService {
 
     // MARK: - MLX TTS Implementation
 
-    private var model: SopranoModel?
+    private var model: FishSpeechModel?
 
     /// Load the TTS model (call this during app initialization)
     func loadModel() async throws {
@@ -46,25 +47,47 @@ class MLXAudioTTSService {
         }
 
         // Start loading
-        let task = Task {
-            print("📦 Loading MLX TTS model (Soprano-1.1-80M)...")
-            print("   This may take a moment on first run (downloading ~80MB)...")
+        isLoading = true
+        loadProgress = 0.0
 
-            // Load Soprano 1.1 model (95% fewer hallucinations, better single-word quality)
-            model = try await SopranoModel.fromPretrained("mlx-community/Soprano-1.1-80M-bf16")
+        let task = Task {
+            // Get the configured model ID from ConfigService
+            let config = ConfigService.shared
+            let modelId: String? = config.getConfig(key: "mlx.tts_model")
+            let actualModelId = modelId ?? "mlx-community/fish-audio-s2-pro-8bit"
+
+            print("📦 Loading MLX TTS model (Fish Audio S2 Pro)...")
+            print("   This may take a moment on first run (downloading ~300MB)...")
+
+            // Load Fish Audio S2 Pro model (#1 ranked open-weight TTS)
+            // Note: fromPretrained doesn't provide progress callbacks, download happens internally
+            model = try await FishSpeechModel.fromPretrained(actualModelId)
 
             print("✅ MLX TTS model loaded successfully")
+            self.loadProgress = 1.0
+
+            // Mark as downloaded in ModelRegistry
+            do {
+                try await ModelRegistry.shared.markAsDownloaded(
+                    modelId: actualModelId,
+                    sizeMB: 300
+                )
+                print("✅ Model '\(actualModelId)' marked as downloaded in registry")
+            } catch {
+                print("⚠️ Failed to mark model as downloaded: \(error)")
+            }
         }
 
         loadTask = task
         try await task.value
         loadTask = nil
+        isLoading = false
     }
 
     // MARK: - Text Preprocessing
 
     /// Preprocess text for optimal TTS quality
-    /// Soprano works best with 2-15 second inputs. Single words need padding.
+    /// Fish Audio S2 Pro works best with natural sentence structure.
     private func preprocessTextForTTS(_ text: String) -> String {
         let words = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
 
@@ -105,8 +128,14 @@ class MLXAudioTTSService {
             print("   Preprocessed single word: '\(text)' -> '\(processedText)'")
         }
 
-        // Generate audio array - simplified API
-        let audioMLXArray = try await model.generate(text: processedText)
+        // Generate audio array with required parameters
+        let audioMLXArray = try await model.generate(
+            text: processedText,
+            voice: voice ?? "en-US-Standard-A",
+            refAudio: nil,
+            refText: nil,
+            language: language ?? "en"
+        )
 
         // Convert MLXArray to [Float]
         let audioArray = audioMLXArray.asArray(Float.self)

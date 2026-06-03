@@ -566,15 +566,48 @@ class ConversionService {
         return try? result.get() ?? nil
     }
 
-    func getAllConversions() -> [Conversion] {
-        let result = storage.getAllConversions()
+    func getAllConversions(limit: Int? = nil, offset: Int = 0) -> [Conversion] {
+        let result = storage.getAllConversions(limit: limit, offset: offset)
         switch result {
         case .ok(let conversions):
-            print("✅ ConversionService.getAllConversions: Found \(conversions.count) conversions")
+            print("✅ ConversionService.getAllConversions: Found \(conversions.count) conversions (limit: \(limit?.description ?? "none"), offset: \(offset))")
             return conversions
         case .err(let error):
             print("❌ ConversionService.getAllConversions failed: \(error)")
             return []
+        }
+    }
+
+    func getFavorites(limit: Int? = nil, offset: Int = 0) -> [Conversion] {
+        let result = storage.getFavorites(limit: limit, offset: offset)
+        switch result {
+        case .ok(let conversions):
+            return conversions
+        case .err(let error):
+            print("❌ ConversionService.getFavorites failed: \(error)")
+            return []
+        }
+    }
+
+    func getConversionsByLabel(label: String, limit: Int? = nil, offset: Int = 0) -> [Conversion] {
+        let result = storage.getConversionsByLabel(label: label, limit: limit, offset: offset)
+        switch result {
+        case .ok(let conversions):
+            return conversions
+        case .err(let error):
+            print("❌ ConversionService.getConversionsByLabel failed: \(error)")
+            return []
+        }
+    }
+
+    func getLabelCounts() -> [String: Int] {
+        let result = storage.getLabelCounts()
+        switch result {
+        case .ok(let counts):
+            return counts
+        case .err(let error):
+            print("❌ ConversionService.getLabelCounts failed: \(error)")
+            return [:]
         }
     }
 

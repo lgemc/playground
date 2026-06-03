@@ -2,7 +2,10 @@ import Foundation
 import GRDB
 
 /// Represents a single AI conversion operation in the history
-struct Conversion: Codable, Identifiable {
+struct Conversion: Codable, Identifiable, Equatable {
+    static func == (lhs: Conversion, rhs: Conversion) -> Bool {
+        lhs.id == rhs.id
+    }
     var id: String
     var type: ConversionType
     var inputText: String?

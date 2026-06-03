@@ -58,8 +58,8 @@ class AudioGenerationService {
     }
 
     var mlxModel: MLXModelConfig.TTSModel {
-        let modelName = config.getConfig(key: configKeyMLXModel) ?? "kokoro"
-        return MLXModelConfig.TTSModel(rawValue: "mlx-community/\(modelName)") ?? .kokoro
+        let modelName = config.getConfig(key: configKeyMLXModel) ?? "fish-audio-s2-pro-8bit"
+        return MLXModelConfig.TTSModel(rawValue: "mlx-community/\(modelName)") ?? .fishAudio
     }
 
     var mlxVoice: String {

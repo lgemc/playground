@@ -47,8 +47,8 @@ enum MLXModelConfig {
     // MARK: - Text-to-Speech Models
 
     enum TTSModel: String, CaseIterable {
-        /// Fast, multilingual, 54 voice presets, 82M parameters
-        case kokoro = "mlx-community/kokoro-82m"
+        /// Fish Audio S2 Pro: #1 ranked open-weight TTS (Elo 1123)
+        case fishAudio = "mlx-community/fish-audio-s2-pro-8bit"
 
         /// Qwen3 TTS: 0.6B parameters, 4-bit quantized
         case qwen3 = "mlx-community/Qwen3-TTS-0.6B-4bit"
@@ -58,7 +58,7 @@ enum MLXModelConfig {
 
         var estimatedMemoryMB: Int {
             switch self {
-            case .kokoro: return 350  // ~350MB
+            case .fishAudio: return 300  // ~300MB (8-bit)
             case .qwen3: return 400  // ~400MB (4-bit)
             case .cosyvoice: return 800  // ~800MB
             }
@@ -66,7 +66,7 @@ enum MLXModelConfig {
 
         var supportsStreaming: Bool {
             switch self {
-            case .kokoro: return true
+            case .fishAudio: return true
             case .qwen3: return true
             case .cosyvoice: return true
             }
@@ -162,7 +162,7 @@ enum MLXModelConfig {
 
     /// Automatically select best TTS model
     static func recommendedTTSModel() -> TTSModel {
-        return .kokoro  // Fast, multilingual, excellent quality
+        return .fishAudio  // #1 ranked open-weight TTS (Elo 1123)
     }
 
     /// Automatically select best image model based on available memory (DEPRECATED - use recommendedFluxModel)

@@ -275,26 +275,23 @@ enum MLXTTSError: Error {
 // MARK: - Note on Future Integration
 
 /*
- TODO: Integrate mlx-audio-swift for native TTS
+ TODO: Use MLXAudioTTSService for native on-device TTS
 
- When mlx-audio-swift becomes available for iOS, replace AVSpeechSynthesizer with:
+ MLXAudioTTSService provides high-quality neural text-to-speech using mlx-audio-swift:
 
- import MLXAudio
+ import MLXAudioTTS
 
- let tts = try await MLXAudio.TTS(
-     model: "kokoro-82m",  // or other mlx-community TTS models
-     voice: "af_bella"
- )
-
- let audioData = try await tts.synthesize(
+ let audioData = try await MLXAudioTTSService.shared.synthesize(
      text: text,
-     speed: speed
+     model: .fishAudio,  // Fish Audio S2 Pro (#1 ranked open-weight TTS)
+     voice: "en-US-Standard-A",
+     language: "en"
  )
 
  Benefits:
- - Much higher quality voices
- - Multilingual support (54 voices for Kokoro)
- - Faster generation
+ - Fish Audio S2 Pro: #1 ranked open-weight TTS (Elo 1123)
+ - Natural, human-like voices
  - Offline support with mlx-community models
- - Full control over voice characteristics
+ - Fast generation on Apple Silicon
+ - Supports multiple languages and voices
  */

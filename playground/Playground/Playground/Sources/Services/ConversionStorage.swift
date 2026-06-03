@@ -40,12 +40,16 @@ class ConversionStorage {
         }
     }
 
-    func getAllConversions() -> Result<[Conversion], Error> {
+    func getAllConversions(limit: Int? = nil, offset: Int = 0) -> Result<[Conversion], Error> {
         return Result {
             try database.read { db in
-                try Conversion
-                    .order(Conversion.Columns.createdAt.desc)
-                    .fetchAll(db)
+                var query = Conversion.order(Conversion.Columns.createdAt.desc)
+
+                if let limit = limit {
+                    query = query.limit(limit, offset: offset)
+                }
+
+                return try query.fetchAll(db)
             }
         }
     }
@@ -167,24 +171,59 @@ class ConversionStorage {
         }
     }
 
-    func getFavorites() -> Result<[Conversion], Error> {
+    func getFavorites(limit: Int? = nil, offset: Int = 0) -> Result<[Conversion], Error> {
         return Result {
             try database.read { db in
-                try Conversion
+                var query = Conversion
                     .filter(Conversion.Columns.isFavorite == true)
                     .order(Conversion.Columns.createdAt.desc)
-                    .fetchAll(db)
+
+                if let limit = limit {
+                    query = query.limit(limit, offset: offset)
+                }
+
+                return try query.fetchAll(db)
             }
         }
     }
 
-    func getConversionsByLabel(label: String) -> Result<[Conversion], Error> {
+    func getConversionsByLabel(label: String, limit: Int? = nil, offset: Int = 0) -> Result<[Conversion], Error> {
         return Result {
             try database.read { db in
-                try Conversion
+                var query = Conversion
                     .filter(Conversion.Columns.label == label)
                     .order(Conversion.Columns.createdAt.desc)
-                    .fetchAll(db)
+
+                if let limit = limit {
+                    query = query.limit(limit, offset: offset)
+                }
+
+                return try query.fetchAll(db)
+            }
+        }
+    }
+
+    /// Get label counts efficiently with a single SQL GROUP BY query
+    func getLabelCounts() -> Result<[String: Int], Error> {
+        return Result {
+            try database.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT label, COUNT(*) as count
+                        FROM conversions
+                        WHERE label IS NOT NULL
+                        GROUP BY label
+                        """
+                )
+
+                var counts: [String: Int] = [:]
+                for row in rows {
+                    if let label: String = row["label"], let count: Int = row["count"] {
+                        counts[label] = count
+                    }
+                }
+                return counts
             }
         }
     }

@@ -338,6 +338,28 @@ class PlaygroundDatabase {
             print("✅ Added favorites and labels to conversions")
         }
 
+        // Migration v11: Model download permissions
+        migrator.registerMigration("v11_model_permissions") { db in
+            print("🤖 Creating model_permissions table...")
+
+            try db.create(table: "model_permissions") { t in
+                t.column("model_id", .text).primaryKey() // HuggingFace model ID
+                t.column("model_type", .text).notNull().indexed() // "chat", "whisper", "tts"
+                t.column("approved", .boolean).notNull().defaults(to: false)
+                t.column("approved_at", .datetime)
+                t.column("denied_at", .datetime)
+                t.column("last_prompted_at", .datetime)
+                t.column("created_at", .datetime).notNull()
+                t.column("updated_at", .datetime).notNull()
+            }
+
+            // Create index for quick approval lookups
+            try db.create(index: "idx_model_permissions_approved", on: "model_permissions", columns: ["approved"])
+            try db.create(index: "idx_model_permissions_type", on: "model_permissions", columns: ["model_type"])
+
+            print("✅ Created model_permissions table")
+        }
+
         try migrator.migrate(queue)
     }
 
