@@ -12,6 +12,7 @@ class ConversionService {
     private let mlx = MLXService.shared
     private let vlm = MLXVLMService.shared
     private let fileExtraction = FileExtractionService.shared
+    private let autoLabeling = AutoLabelingService.shared
 
     private init() {}
 
@@ -145,6 +146,13 @@ class ConversionService {
 
         // Create chat for conversions with text output
         try await createChatIfNeeded(for: conversion, duration: duration)
+
+        // Auto-label the conversion
+        if let updated = getConversion(id: conversion.id) {
+            Task.detached(priority: .background) {
+                await self.autoLabeling.autoLabel(conversion: updated)
+            }
+        }
     }
 
     /// Create a chat from any conversion
@@ -323,6 +331,13 @@ class ConversionService {
         )
 
         continuation.yield(.completed(accumulatedText, chatId: chatId))
+
+        // Auto-label the conversion
+        if let updated = getConversion(id: conversion.id) {
+            Task.detached(priority: .background) {
+                await self.autoLabeling.autoLabel(conversion: updated)
+            }
+        }
     }
 
     // MARK: - Conversion Type Implementations

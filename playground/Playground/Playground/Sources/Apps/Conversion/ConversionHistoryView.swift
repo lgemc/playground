@@ -7,14 +7,20 @@ struct ConversionHistoryView: View {
     @State private var searchText = ""
     @State private var showingInput = false
     @State private var preselectedInputType: ConversionType? = nil
-    @State private var showingSettings = false
     @State private var isLoading = true
     @State private var selectedFilter: FilterOption = .all
     @State private var availableLabels: [String] = []
     @State private var navigateToChatId: String?
+    @State private var showingSearch = false
+    @State private var selectedView: ViewType = .conversions
 
     private let conversionService = ConversionService.shared
     private let conversionStorage = ConversionStorage.shared
+
+    enum ViewType {
+        case conversions
+        case labels
+    }
 
     enum FilterOption: Equatable {
         case all
@@ -31,44 +37,47 @@ struct ConversionHistoryView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            VStack(spacing: 0) {
-                // Filter pills
-                if !conversions.isEmpty {
-                    filterBar
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                }
+        VStack(spacing: 0) {
+            if selectedView == .conversions {
+                VStack(spacing: 0) {
+                    // Filter pills
+                    if !conversions.isEmpty {
+                        filterBar
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                    }
 
-                if isLoading {
-                    loadingView
-                } else if conversions.isEmpty {
-                    emptyStateView
-                } else {
-                    conversionsListView
+                    if isLoading {
+                        loadingView
+                    } else if conversions.isEmpty {
+                        emptyStateView
+                    } else {
+                        conversionsListView
+                    }
                 }
+            } else {
+                LabelsConfigView()
             }
 
-            // Floating Action Button
-            addButton
+            // Bottom navigation bar or search bar
+            if showingSearch {
+                searchBar
+            } else {
+                bottomNavigationBar
+            }
         }
-        .navigationTitle("AI Conversions")
+        .navigationTitle(selectedView == .conversions ? "AI Conversions" : "Labels")
         .navigationBarTitleDisplayMode(.large)
-        .searchable(text: $searchText, prompt: "Search conversions...")
         .onChange(of: searchText) { oldValue, newValue in
             filterConversions()
         }
+        .onChange(of: selectedView) { oldValue, newValue in
+            if newValue == .labels {
+                showingSearch = false
+            }
+        }
         .onChange(of: selectedFilter) { oldValue, newValue in
             filterConversions()
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    showingSettings = true
-                } label: {
-                    Image(systemName: "gear")
-                }
-            }
         }
         .onAppear {
             loadConversions()
@@ -84,11 +93,6 @@ struct ConversionHistoryView: View {
         }) {
             ConversionInputView(preselectedType: preselectedInputType) { chatId in
                 navigateToChatId = chatId
-            }
-        }
-        .sheet(isPresented: $showingSettings) {
-            NavigationStack {
-                SettingsView()
             }
         }
         .onChange(of: navigateToChatId) { oldValue, newValue in
@@ -232,10 +236,6 @@ struct ConversionHistoryView: View {
                 }
             }
 
-            // Spacer for FAB
-            Color.clear
-                .frame(height: 80)
-                .listRowSeparator(.hidden)
         }
         .listStyle(.plain)
         .refreshable {
@@ -247,29 +247,125 @@ struct ConversionHistoryView: View {
     }
 
     @ViewBuilder
-    private var addButton: some View {
-        Menu {
-            ForEach(ConversionType.allCases, id: \.self) { type in
-                Button {
-                    openInputWithType(type)
-                } label: {
-                    Label(type.displayName, systemImage: type.inputIcon)
-                }
+    private var searchBar: some View {
+        HStack(spacing: 12) {
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.gray)
+
+                TextField("Search conversions...", text: $searchText)
+                    .textFieldStyle(.plain)
             }
-        } label: {
-            Image(systemName: "plus")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .foregroundColor(.white)
-                .frame(width: 60, height: 60)
-                .background(Color.blue)
-                .clipShape(Circle())
-                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-        } primaryAction: {
-            showingInput = true
+            .padding(12)
+            .background(Color(.systemGray6))
+            .cornerRadius(10)
+
+            Button {
+                withAnimation {
+                    showingSearch = false
+                    searchText = ""
+                }
+            } label: {
+                Text("Cancel")
+                    .foregroundColor(.blue)
+                    .font(.body)
+            }
         }
-        .padding(.trailing, 24)
-        .padding(.bottom, 80) // Closer to bottom, near search area
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+        .overlay(
+            Rectangle()
+                .fill(Color(.separator))
+                .frame(height: 0.5),
+            alignment: .top
+        )
+    }
+
+    @ViewBuilder
+    private var bottomNavigationBar: some View {
+        HStack(spacing: 0) {
+            // Conversions tab
+            Button {
+                selectedView = .conversions
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.title2)
+                    Text("Conversions")
+                        .font(.caption)
+                }
+                .foregroundColor(selectedView == .conversions ? .blue : .gray)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+
+            // Labels tab
+            Button {
+                selectedView = .labels
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: "tag")
+                        .font(.title2)
+                    Text("Labels")
+                        .font(.caption)
+                }
+                .foregroundColor(selectedView == .labels ? .blue : .gray)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+
+            // Search button
+            Button {
+                withAnimation {
+                    showingSearch = true
+                }
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.title2)
+                    Text("Search")
+                        .font(.caption)
+                }
+                .foregroundColor(.gray)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+
+            // New conversion menu
+            Menu {
+                ForEach(ConversionType.allCases, id: \.self) { type in
+                    Button {
+                        openInputWithType(type)
+                    } label: {
+                        HStack {
+                            Image(systemName: type.inputIcon)
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                            Image(systemName: type.outputIcon)
+                            Text(type.displayName)
+                        }
+                    }
+                }
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title2)
+                    Text("New")
+                        .font(.caption)
+                }
+                .foregroundColor(.blue)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+        }
+        .background(Color(.systemBackground))
+        .overlay(
+            Rectangle()
+                .fill(Color(.separator))
+                .frame(height: 0.5),
+            alignment: .top
+        )
     }
 
     // MARK: - Data Management
