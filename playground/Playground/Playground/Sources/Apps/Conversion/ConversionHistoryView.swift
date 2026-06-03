@@ -11,6 +11,7 @@ struct ConversionHistoryView: View {
     @State private var isLoading = true
     @State private var selectedFilter: FilterOption = .all
     @State private var availableLabels: [String] = []
+    @State private var navigateToChatId: String?
 
     private let conversionService = ConversionService.shared
     private let conversionStorage = ConversionStorage.shared
@@ -75,21 +76,49 @@ struct ConversionHistoryView: View {
         }
         .sheet(isPresented: $showingInput, onDismiss: {
             // Reload from storage to ensure we have the latest persisted data
-            // Small delay to ensure async storage write completes
             print("🔄 Sheet dismissed, reloading conversions...")
             preselectedInputType = nil
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                loadConversions()
-            }
+            // Immediate reload to refresh the list
+            loadConversions()
+            loadLabels()
         }) {
-            ConversionInputView(preselectedType: preselectedInputType)
+            ConversionInputView(preselectedType: preselectedInputType) { chatId in
+                navigateToChatId = chatId
+            }
         }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
                 SettingsView()
             }
         }
+        .onChange(of: navigateToChatId) { oldValue, newValue in
+            if newValue != nil {
+                // Reload conversions after a short delay to ensure metadata is saved
+                Task {
+                    try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                    loadConversions()
+                }
+            }
+        }
+        .background(
+            NavigationLink(
+                destination: navigateToChatId.map { ChatView(chatId: $0) },
+                isActive: Binding(
+                    get: { navigateToChatId != nil },
+                    set: {
+                        if !$0 {
+                            navigateToChatId = nil
+                            // Reload when coming back from chat
+                            loadConversions()
+                            loadLabels()
+                        }
+                    }
+                )
+            ) {
+                EmptyView()
+            }
+            .hidden()
+        )
     }
 
     @ViewBuilder

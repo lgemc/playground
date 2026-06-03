@@ -43,11 +43,9 @@ class MLXService {
         config.defineConfig(key: "mlx.batch_size", value: 512)  // Logical batch size
         config.defineConfig(key: "mlx.context_size", value: 2048)  // Context window size
 
-        // Model selection - you have 11.8GB available, can use larger models!
-        // qwen3_5_2b_6bit = ~1.6GB (balanced, fast, 262K context)
-        // qwen3_5_4b_4bit = ~2.8GB (default, better quality, 262K context)
-        // mistral_7b_4bit = ~4.5GB (best quality, slower)
-        config.defineConfig(key: "mlx.chat_model", value: MLXModelConfig.ChatModel.qwen3_5_4b_4bit.rawValue)
+        // Model selection - using Qwen3.5 2B
+        // qwen3_5_2b_6bit = ~1.6GB (262K context, multimodal)
+        config.defineConfig(key: "mlx.chat_model", value: MLXModelConfig.ChatModel.qwen3_5_2b_6bit.rawValue)
         config.defineConfig(key: "mlx.whisper_model", value: MLXModelConfig.WhisperModel.small.rawValue)
         config.defineConfig(key: "mlx.tts_model", value: MLXModelConfig.TTSModel.kokoro.rawValue)
         config.defineConfig(key: "mlx.image_model", value: MLXModelConfig.ImageModel.sdxlTurbo.rawValue)

@@ -1,23 +1,10 @@
 import SwiftUI
 import FoundationModels
 import ImagePlayground
+import AVFoundation
 
 /// Chat conversation view - displays messages and handles LLM streaming
 struct ChatView: View {
-    enum ChatProvider: String, CaseIterable {
-        case foundationModels = "Apple"
-        case mlx = "MLX"
-        case openai = "API"
-
-        var icon: String {
-            switch self {
-            case .foundationModels: return "apple.logo"
-            case .mlx: return "cpu"
-            case .openai: return "cloud"
-            }
-        }
-    }
-
     let chatId: String
 
     @State private var chat: Chat?
@@ -26,19 +13,11 @@ struct ChatView: View {
     @State private var isGenerating = false
     @State private var streamingContent = ""
     @State private var scrollTarget: String?
-    @State private var selectedProvider: ChatProvider = .foundationModels
     @State private var isLoadingChat = false
-    @State private var selectedModel: MLXModelConfig.ChatModel = .qwen3_5_4b_4bit
-    @State private var foundationSession: LanguageModelSession?
+    private let selectedModel: MLXModelConfig.ChatModel = .qwen3_5_2b_6bit
 
-    // Image generation
-    @State private var showImageGenerator = false
-    @State private var showImagePromptDialog = false
-    @State private var imagePrompt = ""
 
-    private let autocompletion = AutocompletionService.shared
     private let mlx = MLXService.shared
-    private let systemModel = SystemLanguageModel.default
 
     // Reusable date formatter to avoid creating new instances
     private static let timeFormatter: DateFormatter = {
@@ -52,18 +31,7 @@ struct ChatView: View {
         contentView
             .navigationTitle(chat?.title ?? "Chat")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
-            .onAppear(perform: handleOnAppear)
-            .alert("Generate Image", isPresented: $showImagePromptDialog) {
-                imagePromptAlertContent
-            } message: {
-                Text("Describe what you want to generate")
-            }
-            .imagePlaygroundSheet(
-                isPresented: $showImageGenerator,
-                concept: imagePrompt.isEmpty ? "a creative image" : imagePrompt,
-                onCompletion: handleImageCompletion
-            )
+            .onAppear(perform: loadChat)
     }
 
     @ViewBuilder
@@ -136,123 +104,6 @@ struct ChatView: View {
         .padding()
         .padding(.bottom, 20)
         .background(Color(.systemBackground))
-    }
-
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .navigationBarLeading) {
-            HStack(spacing: 8) {
-                providerPicker
-                if selectedProvider == .mlx {
-                    modelPicker
-                }
-            }
-        }
-
-        ToolbarItem(placement: .navigationBarTrailing) {
-            actionsMenu
-        }
-    }
-
-    @ViewBuilder
-    private var providerPicker: some View {
-        Picker("", selection: $selectedProvider) {
-            ForEach(availableProviders(), id: \.self) { provider in
-                Label(provider.rawValue, systemImage: provider.icon)
-                    .tag(provider)
-            }
-        }
-        .pickerStyle(.menu)
-        .onChange(of: selectedProvider) { oldValue, newValue in
-            if oldValue == .mlx && newValue != .mlx {
-                mlx.chat.unloadModel()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var modelPicker: some View {
-        Picker("", selection: $selectedModel) {
-            ForEach(MLXModelConfig.ChatModel.allCases, id: \.self) { model in
-                Text(modelShortName(model)).tag(model)
-            }
-        }
-        .pickerStyle(.menu)
-    }
-
-    @ViewBuilder
-    private var actionsMenu: some View {
-        Menu {
-            Button(action: { showImagePromptDialog = true }) {
-                Label("Generate Image", systemImage: "photo.on.rectangle.angled")
-            }
-
-            Button(action: regenerateTitle) {
-                Label("Regenerate Title", systemImage: "pencil")
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-        }
-    }
-
-    @ViewBuilder
-    private var imagePromptAlertContent: some View {
-        TextField("Describe the image...", text: $imagePrompt)
-        Button("Generate") {
-            if !imagePrompt.isEmpty {
-                showImageGenerator = true
-            }
-        }
-        Button("Cancel", role: .cancel) {
-            imagePrompt = ""
-        }
-    }
-
-    private func handleOnAppear() {
-        loadChat()
-        initializeFoundationModels()
-
-        if systemModel.availability != .available && selectedProvider == .foundationModels {
-            selectedProvider = .mlx
-        }
-    }
-
-    private func handleImageCompletion(url: URL?) {
-        if let url = url {
-            Task {
-                await handleGeneratedImage(url: url)
-            }
-        }
-        imagePrompt = ""
-    }
-
-    private func availableProviders() -> [ChatProvider] {
-        var providers: [ChatProvider] = []
-
-        // Check if Foundation Models is available
-        if systemModel.availability == .available {
-            providers.append(.foundationModels)
-        }
-
-        providers.append(.mlx)
-        providers.append(.openai)
-
-        return providers
-    }
-
-    private func initializeFoundationModels() {
-        guard systemModel.availability == .available else {
-            print("⚠️ Foundation Models not available: \(systemModel.availability)")
-            return
-        }
-
-        foundationSession = LanguageModelSession {
-            """
-            You are a helpful assistant. Keep responses clear, concise, and friendly.
-            """
-        }
-
-        print("✅ Foundation Models session initialized")
     }
 
     private func loadChat() {
@@ -328,172 +179,62 @@ struct ChatView: View {
         // Scroll to streaming message initially
         scrollTarget = "streaming"
 
-        // Route to appropriate provider
-        switch selectedProvider {
-        case .foundationModels:
-            await generateWithFoundationModels()
-            streamingContent = ""
-            isGenerating = false
-            return
-
-        case .mlx, .openai:
-            break  // Continue with existing implementation below
-        }
-
         do {
             // Convert messages to API format
-            var conversationHistory = messages.map {
+            let conversationHistory = messages.map {
                 AutocompletionService.ChatMessage(
                     role: $0.role.rawValue,
                     content: $0.content
                 )
             }
 
-            // Get available tools (only when using API, not MLX or Foundation Models)
-            let tools: [[String: Any]]?
-            if selectedProvider == .mlx {
-                tools = nil  // MLX doesn't support tools
-            } else {
-                tools = await ToolService.shared.toOpenAIFormat()
+            var buffer = ""
+            var chunkCount = 0
+
+            // Use MLX streaming with Qwen2B
+            let stream = mlx.chat.completeStream(messages: conversationHistory, model: selectedModel)
+
+            for try await chunk in stream {
+                buffer += chunk
+                chunkCount += 1
+
+                // Only update UI every 5 chunks or when buffer is large
+                if chunkCount % 5 == 0 || buffer.count > 50 {
+                    streamingContent += buffer
+                    buffer = ""
+
+                    // Scroll without animation to reduce lag
+                    if chunkCount % 20 == 0 {
+                        scrollTarget = "streaming"
+                    }
+                }
             }
 
-            // Tool calling loop - continue until LLM responds without tool calls
-            while true {
-                var buffer = ""
-                var chunkCount = 0
-                var toolCalls: [(id: String, name: String, args: [String: Any])] = []
-                var isDone = false
+            // Flush remaining buffer
+            if !buffer.isEmpty {
+                streamingContent += buffer
+            }
 
-                // Stream response with tools support
-                if let tools = tools, !tools.isEmpty {
-                    // Use tool-enabled streaming
-                    let stream = autocompletion.completeWithTools(
-                        messages: conversationHistory,
-                        tools: tools
-                    )
+            // Save the message
+            if !streamingContent.isEmpty {
+                let finalContent = streamingContent
+                let result = ChatStorage.shared.createMessage(
+                    chatId: chatId,
+                    role: .assistant,
+                    content: finalContent
+                )
 
-                    for try await event in stream {
-                        switch event {
-                        case .contentChunk(let chunk):
-                            buffer += chunk
-                            chunkCount += 1
-
-                            // Only update UI every 5 chunks or when buffer is large
-                            if chunkCount % 5 == 0 || buffer.count > 50 {
-                                streamingContent += buffer
-                                buffer = ""
-
-                                // Scroll without animation to reduce lag
-                                if chunkCount % 20 == 0 {
-                                    scrollTarget = "streaming"
-                                }
-                            }
-
-                        case .toolCall(let id, let name, let args):
-                            toolCalls.append((id, name, args))
-
-                        case .done:
-                            isDone = true
-                        }
-                    }
+                if result.isErr {
+                    print("❌ Failed to save assistant message: \(result.error!)")
                 } else {
-                    // Use regular streaming (no tools)
-                    let stream: AsyncThrowingStream<String, Error>
-                    if selectedProvider == .mlx {
-                        stream = mlx.chat.completeStream(messages: conversationHistory, model: selectedModel)
-                    } else {
-                        stream = autocompletion.completeStream(messages: conversationHistory)
-                    }
+                    messages.append(result.value!)
+                    scrollTarget = result.value!.id
 
-                    for try await chunk in stream {
-                        buffer += chunk
-                        chunkCount += 1
-
-                        // Only update UI every 5 chunks or when buffer is large
-                        if chunkCount % 5 == 0 || buffer.count > 50 {
-                            streamingContent += buffer
-                            buffer = ""
-
-                            // Scroll without animation to reduce lag
-                            if chunkCount % 20 == 0 {
-                                scrollTarget = "streaming"
-                            }
-                        }
-                    }
-                    isDone = true
-                }
-
-                // Flush remaining buffer
-                if !buffer.isEmpty {
-                    streamingContent += buffer
-                }
-
-                // If no tool calls, we're done - save the message
-                if toolCalls.isEmpty {
-                    if !streamingContent.isEmpty {
-                        let finalContent = streamingContent
-                        let result = ChatStorage.shared.createMessage(
-                            chatId: chatId,
-                            role: .assistant,
-                            content: finalContent
-                        )
-
-                        if result.isErr {
-                            print("❌ Failed to save assistant message: \(result.error!)")
-                        } else {
-                            messages.append(result.value!)
-                            scrollTarget = result.value!.id
-
-                            // Auto-generate title if this is the first exchange
-                            if messages.count == 2 {
-                                await generateTitle()
-                            }
-                        }
-                    }
-                    break  // Exit the tool calling loop
-                }
-
-                // Save current streaming content before tool execution
-                let assistantContentBeforeTools = streamingContent
-
-                // Execute tool calls
-                for toolCall in toolCalls {
-                    print("🛠️ Executing tool: \(toolCall.name) with args: \(toolCall.args)")
-
-                    // Show tool execution status in UI
-                    streamingContent += "\n\n_Executing \(toolCall.name)..._"
-
-                    let result = await ToolService.shared.execute(
-                        name: toolCall.name,
-                        arguments: toolCall.args
-                    )
-
-                    print("🛠️ Tool result: \(result.toJSON())")
-
-                    // Add assistant message with tool call to history
-                    conversationHistory.append(AutocompletionService.ChatMessage(
-                        role: "assistant",
-                        content: assistantContentBeforeTools  // Use saved content, not accumulating UI text
-                    ))
-
-                    // Add tool result to history
-                    let resultJSON = result.toJSON()
-                    let resultString = (try? String(data: JSONSerialization.data(withJSONObject: resultJSON), encoding: .utf8)) ?? "{}"
-                    conversationHistory.append(AutocompletionService.ChatMessage(
-                        role: "tool",
-                        content: resultString
-                    ))
-
-                    // Update UI to show tool executed
-                    if result.isSuccess {
-                        streamingContent += " ✅"
-                    } else {
-                        streamingContent += " ❌"
+                    // Auto-generate title if this is the first exchange
+                    if messages.count == 2 {
+                        await generateTitle()
                     }
                 }
-
-                // Reset streaming content for next iteration (clear the tool execution UI messages)
-                streamingContent = ""
             }
 
         } catch {
@@ -505,189 +246,21 @@ struct ChatView: View {
         isGenerating = false
     }
 
-    private func generateWithFoundationModels() async {
-        guard let session = foundationSession else {
-            await MainActor.run {
-                streamingContent = "⚠️ Foundation Models not available"
-            }
-            return
-        }
-
-        do {
-            // Build conversation context from message history
-            let conversationContext = messages.map { message in
-                "\(message.role.rawValue): \(message.content)"
-            }.joined(separator: "\n\n")
-
-            // Stream response from Foundation Models
-            let stream = session.streamResponse(to: conversationContext)
-
-            var chunkCount = 0
-
-            for try await partial in stream {
-                // The partial stream returns String.PartialGenerated, access content directly
-                let content = String(partial.content)
-
-                // Update UI every 3 chunks for smoother display
-                if chunkCount % 3 == 0 {
-                    await MainActor.run {
-                        streamingContent = content
-
-                        // Scroll periodically
-                        if chunkCount % 15 == 0 {
-                            scrollTarget = "streaming"
-                        }
-                    }
-                }
-                chunkCount += 1
-            }
-
-            // Ensure final content is displayed
-            await MainActor.run {
-                // Save completed message
-                if !streamingContent.isEmpty {
-                    let result = ChatStorage.shared.createMessage(
-                        chatId: chatId,
-                        role: .assistant,
-                        content: streamingContent
-                    )
-
-                    if result.isErr {
-                        print("❌ Failed to save assistant message: \(result.error!)")
-                    } else {
-                        messages.append(result.value!)
-                        scrollTarget = result.value!.id
-
-                        // Auto-generate title if this is the first exchange
-                        Task {
-                            if messages.count == 2 {
-                                await generateTitle()
-                            }
-                        }
-                    }
-                }
-            }
-
-        } catch {
-            await MainActor.run {
-                // Handle Foundation Models errors
-                let errorMessage: String
-                if let nsError = error as NSError? {
-                    switch nsError.code {
-                    case 1: // Context window exceeded
-                        errorMessage = "⚠️ Conversation too long (4096 token limit). Please start a new chat."
-                    case 2: // Rate limited
-                        errorMessage = "⚠️ System is busy. Please try again in a moment."
-                    case 3: // Guardrail violation
-                        errorMessage = "⚠️ Content was flagged by safety filters."
-                    case 4: // Unsupported language
-                        errorMessage = "⚠️ Language not supported by Foundation Models."
-                    default:
-                        errorMessage = "⚠️ Error: \(error.localizedDescription)"
-                    }
-                } else {
-                    errorMessage = "⚠️ Error: \(error.localizedDescription)"
-                }
-                streamingContent = errorMessage
-            }
-        }
-    }
-
-    private func handleGeneratedImage(url: URL) async {
-        // Save image to permanent storage
-        guard let permanentURL = saveImageToPermanentStorage(from: url) else {
-            print("❌ Failed to save generated image")
-            return
-        }
-
-        // Create message with image reference
-        let imageContent = "image://\(permanentURL.path)"
-
-        await MainActor.run {
-            Task.detached(priority: .userInitiated) {
-                let result = await ChatStorage.shared.createMessage(
-                    chatId: chatId,
-                    role: .user,
-                    content: imageContent
-                )
-
-                await MainActor.run {
-                    if result.isErr {
-                        print("❌ Failed to save image message: \(result.error!)")
-                    } else {
-                        messages.append(result.value!)
-                        scrollTarget = result.value!.id
-                    }
-                }
-            }
-        }
-    }
-
-    private func saveImageToPermanentStorage(from tempURL: URL) -> URL? {
-        do {
-            // Create images directory if it doesn't exist
-            let documentsDir = FileManager.default.urls(
-                for: .documentDirectory,
-                in: .userDomainMask
-            ).first!
-
-            let imagesDir = documentsDir.appendingPathComponent("chat_images")
-
-            if !FileManager.default.fileExists(atPath: imagesDir.path) {
-                try FileManager.default.createDirectory(
-                    at: imagesDir,
-                    withIntermediateDirectories: true
-                )
-            }
-
-            // Generate unique filename
-            let filename = "\(UUID().uuidString).png"
-            let permanentURL = imagesDir.appendingPathComponent(filename)
-
-            // Copy image from temporary location
-            try FileManager.default.copyItem(at: tempURL, to: permanentURL)
-
-            print("✅ Saved image to: \(permanentURL.path)")
-            return permanentURL
-
-        } catch {
-            print("❌ Failed to save image: \(error)")
-            return nil
-        }
-    }
 
     private func generateTitle() async {
         guard let firstMessage = messages.first else { return }
 
-        let prompt = """
-        Generate a concise title (3-5 words) for this conversation based on the user's first message: "\(firstMessage.content)"
-
-        Output ONLY the title, nothing else.
-        """
-
         do {
             var titleBuffer = ""
 
-            // Prefer Foundation Models if available, otherwise fall back to MLX
-            if let foundationSession = foundationSession {
-                // Use Apple Foundation Models for title generation
-                let stream = foundationSession.streamResponse(to: prompt)
+            let messages = [
+                AutocompletionService.ChatMessage(role: "system", content: "Generate a concise title (3-5 words) for this conversation. Output ONLY the title."),
+                AutocompletionService.ChatMessage(role: "user", content: firstMessage.content)
+            ]
 
-                for try await partial in stream {
-                    let content = String(partial.content)
-                    titleBuffer = content
-                }
-            } else {
-                // Fall back to MLX model
-                let messages = [
-                    AutocompletionService.ChatMessage(role: "system", content: "Generate a concise title (3-5 words) for this conversation. Output ONLY the title."),
-                    AutocompletionService.ChatMessage(role: "user", content: firstMessage.content)
-                ]
-
-                let stream = mlx.chat.completeStream(messages: messages, model: selectedModel)
-                for try await chunk in stream {
-                    titleBuffer += chunk
-                }
+            let stream = mlx.chat.completeStream(messages: messages, model: selectedModel)
+            for try await chunk in stream {
+                titleBuffer += chunk
             }
 
             let cleanTitle = titleBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -705,47 +278,7 @@ struct ChatView: View {
         }
     }
 
-    private func regenerateTitle() {
-        Task {
-            await generateTitle()
-        }
-    }
 
-    // MARK: - Model Display Helpers
-
-    private func modelShortName(_ model: MLXModelConfig.ChatModel) -> String {
-        switch model {
-        case .lfm25_1b_4bit:
-            return "1.2B"
-        case .qwen3_5_2b_6bit:
-            return "2B"
-        case .llama3_2_3b_4bit:
-            return "3B"
-        case .qwen3_5_4b_4bit:
-            return "4B"
-        // case .llama3_2_3b_8bit:
-        //     return "3B"
-        // case .mistral_7b_4bit:
-        //     return "7B"
-        }
-    }
-
-    private func modelDisplayName(_ model: MLXModelConfig.ChatModel) -> String {
-        switch model {
-        case .lfm25_1b_4bit:
-            return "LFM 1.2B (Fast, ~800MB)"
-        case .qwen3_5_2b_6bit:
-            return "Qwen3.5 2B (Balanced, ~1.6GB)"
-        case .llama3_2_3b_4bit:
-            return "Llama 3.2 3B-4bit (~1.85GB)"
-        case .qwen3_5_4b_4bit:
-            return "Qwen3 4B-4bit (~2.8GB)"
-        // case .llama3_2_3b_8bit:
-        //     return "Llama 3.2 3B-8bit (HQ, ~3.2GB)"
-        // case .mistral_7b_4bit:
-        //     return "Mistral 7B (Best, ~4.5GB)"
-        }
-    }
 }
 
 /// Message bubble component
@@ -753,6 +286,10 @@ struct MessageBubble: View {
     let message: Message
     let timeFormatter: DateFormatter
     let useMarkdown: Bool
+
+    @State private var isPlaying: Bool = false
+    @State private var audioPlayer: AVAudioPlayer? = nil
+    private let fileStorage = FileStorage.shared
 
     var body: some View {
         HStack {
@@ -780,6 +317,10 @@ struct MessageBubble: View {
                             .background(backgroundColor)
                             .cornerRadius(16)
                     }
+                } else if message.content.hasPrefix("audio://") {
+                    // Audio file message
+                    let fileId = String(message.content.dropFirst("audio://".count))
+                    audioPlayerView(fileId: fileId)
                 } else {
                     Group {
                         if useMarkdown {
@@ -820,6 +361,107 @@ struct MessageBubble: View {
 
     private var foregroundColor: Color {
         message.role == .user ? .white : .primary
+    }
+
+    @ViewBuilder
+    private func audioPlayerView(fileId: String) -> some View {
+        let fileResult = fileStorage.getFile(id: fileId)
+        if case .ok(let file) = fileResult, let file = file {
+            HStack(spacing: 12) {
+                Image(systemName: "waveform")
+                    .foregroundColor(foregroundColor)
+                    .font(.title3)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.name)
+                        .font(.body)
+                        .foregroundColor(foregroundColor)
+                        .lineLimit(1)
+
+                    Text(file.formattedSize)
+                        .font(.caption)
+                        .foregroundColor(foregroundColor.opacity(0.7))
+                }
+
+                Spacer()
+
+                Button(action: {
+                    togglePlayAudio(file: file)
+                }) {
+                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                        .foregroundColor(.white)
+                        .frame(width: 36, height: 36)
+                        .background(isPlaying ? Color.red : Color.blue)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(12)
+            .background(backgroundColor)
+            .cornerRadius(16)
+        } else {
+            Text("🔊 Audio file not found")
+                .foregroundColor(.secondary)
+                .padding(12)
+                .background(backgroundColor)
+                .cornerRadius(16)
+        }
+    }
+
+    private func togglePlayAudio(file: File) {
+        if isPlaying {
+            stopAudio()
+        } else {
+            playAudio(file: file)
+        }
+    }
+
+    private func playAudio(file: File) {
+        do {
+            // Configure audio session
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .default)
+            try audioSession.setActive(true)
+
+            let url = URL(fileURLWithPath: file.absolutePath)
+
+            // Check if file exists
+            guard FileManager.default.fileExists(atPath: file.absolutePath) else {
+                print("❌ Audio file not found: \(file.absolutePath)")
+                return
+            }
+
+            print("🔊 Playing audio from: \(file.absolutePath)")
+            audioPlayer = try AVAudioPlayer(contentsOf: url)
+            audioPlayer?.prepareToPlay()
+
+            guard let player = audioPlayer else {
+                print("❌ Failed to create audio player")
+                return
+            }
+
+            let success = player.play()
+            if success {
+                isPlaying = true
+                print("✅ Audio started playing (duration: \(player.duration)s)")
+
+                // Auto-stop when done
+                DispatchQueue.main.asyncAfter(deadline: .now() + player.duration + 0.5) {
+                    self.isPlaying = false
+                }
+            } else {
+                print("❌ Failed to start audio playback")
+            }
+        } catch {
+            print("❌ Failed to play audio: \(error)")
+            isPlaying = false
+        }
+    }
+
+    private func stopAudio() {
+        audioPlayer?.stop()
+        audioPlayer = nil
+        isPlaying = false
     }
 }
 

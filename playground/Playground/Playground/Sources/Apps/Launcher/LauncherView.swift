@@ -75,26 +75,21 @@ struct AppIconButton: View {
 
 /// Placeholder settings view
 struct SettingsPlaceholder: View {
-    @StateObject private var configService = ConfigService.shared
-
     var body: some View {
         Form {
-            Section("LLM Configuration") {
-                TextField("Base URL", text: Binding(
-                    get: { configService.getString(key: "llm.base_url") },
-                    set: { configService.setConfig(key: "llm.base_url", value: $0) }
-                ))
-                .autocapitalization(.none)
-
-                SecureField("API Key", text: Binding(
-                    get: { configService.getString(key: "llm.api_key") },
-                    set: { configService.setConfig(key: "llm.api_key", value: $0) }
-                ))
-
-                TextField("Model", text: Binding(
-                    get: { configService.getString(key: "llm.model") },
-                    set: { configService.setConfig(key: "llm.model", value: $0) }
-                ))
+            Section("AI Model") {
+                HStack {
+                    Text("Model")
+                    Spacer()
+                    Text("Qwen3.5 2B")
+                        .foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("Provider")
+                    Spacer()
+                    Text("MLX (On-Device)")
+                        .foregroundColor(.secondary)
+                }
             }
 
             Section("About") {

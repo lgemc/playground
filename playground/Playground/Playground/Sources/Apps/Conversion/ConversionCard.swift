@@ -662,13 +662,13 @@ struct LabelSelectorSheet: View {
             )
         )
 
-        // Image to text conversion
+        // Audio to text conversion
         ConversionCard(
             conversion: Conversion(
-                type: .imageToText,
-                inputFileId: "sample-image",
-                outputText: "A beautiful landscape with mountains and trees under a clear blue sky.",
-                metadata: ["model": "qwen-vl"]
+                type: .audioToText,
+                inputFileId: "sample-audio",
+                outputText: "This is a transcribed audio message.",
+                metadata: ["model": "whisper"]
             )
         )
     }

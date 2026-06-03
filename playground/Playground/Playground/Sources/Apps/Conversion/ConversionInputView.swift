@@ -6,6 +6,7 @@ struct ConversionInputView: View {
     @Environment(\.dismiss) private var dismiss
 
     let preselectedType: ConversionType?
+    let onComplete: (String) -> Void
 
     @State private var selectedType: ConversionType = .textToText
     @State private var inputText: String = ""
@@ -14,7 +15,6 @@ struct ConversionInputView: View {
     @State private var isConverting = false
     @State private var streamingOutput = ""
     @State private var currentConversion: Conversion? = nil
-    @State private var navigateToChatId: String? = nil
     @State private var progressStatus = ""
     @State private var progressPercentage: Double = 0.0
     @State private var elapsedTime: TimeInterval = 0
@@ -22,8 +22,9 @@ struct ConversionInputView: View {
 
     private let conversionService = ConversionService.shared
 
-    init(preselectedType: ConversionType? = nil) {
+    init(preselectedType: ConversionType? = nil, onComplete: @escaping (String) -> Void) {
         self.preselectedType = preselectedType
+        self.onComplete = onComplete
         self._selectedType = State(initialValue: preselectedType ?? .textToText)
     }
 
@@ -131,9 +132,6 @@ struct ConversionInputView: View {
             ) { (result: Swift.Result<[URL], Error>) in
                 handleFileSelection(result)
             }
-            .navigationDestination(item: $navigateToChatId) { chatId in
-                ChatView(chatId: chatId)
-            }
         }
     }
 
@@ -187,8 +185,6 @@ struct ConversionInputView: View {
 
     private var allowedFileTypes: [UTType] {
         switch selectedType {
-        case .imageToText:
-            return [.image]
         case .audioToText:
             return [.audio]
         case .videoToText:
@@ -252,8 +248,10 @@ struct ConversionInputView: View {
                             progressPercentage = 1.0
                             statusTimer?.invalidate()
                             isConverting = false
-                            navigateToChatId = chatId
                             dismiss()
+                            if let chatId = chatId {
+                                onComplete(chatId)
+                            }
 
                         case .progress:
                             break
@@ -275,8 +273,10 @@ struct ConversionInputView: View {
                     statusTimer?.invalidate()
 
                     isConverting = false
-                    navigateToChatId = chatId
                     dismiss()
+                    if let chatId = chatId {
+                        onComplete(chatId)
+                    }
                 }
             } catch {
                 print("❌ Conversion failed: \(error)")
@@ -301,8 +301,6 @@ struct ConversionInputView: View {
         switch type {
         case .textToText, .fileToText:
             return "Qwen 3.5 2B"
-        case .imageToText:
-            return "Qwen VL"
         case .textToAudio:
             return "Kokoro TTS"
         case .audioToText, .videoToText:
@@ -312,5 +310,5 @@ struct ConversionInputView: View {
 }
 
 #Preview {
-    ConversionInputView()
+    ConversionInputView { _ in }
 }

@@ -127,9 +127,6 @@ class ConversionService {
         case .textToText:
             try await performTextToText(conversion: conversion)
 
-        case .imageToText:
-            try await performImageToText(conversion: conversion)
-
         case .textToAudio:
             try await performTextToAudio(conversion: conversion)
 
@@ -150,14 +147,33 @@ class ConversionService {
         try await createChatIfNeeded(for: conversion, duration: duration)
     }
 
-    /// Create a chat from any conversion that has text input/output
+    /// Create a chat from any conversion
     private func createChatIfNeeded(for conversion: Conversion, duration: Double) async throws {
+        print("🔍 createChatIfNeeded called for: \(conversion.type.displayName)")
+
         // Get the updated conversion from storage
-        guard let updated = getConversion(id: conversion.id),
-              let outputText = updated.outputText,
-              !outputText.isEmpty else {
+        guard let updated = getConversion(id: conversion.id) else {
+            print("⚠️ Could not get updated conversion from storage")
             return
         }
+
+        // Check if chat already exists
+        if updated.metadata["chat_id"] != nil {
+            print("ℹ️ Chat already exists for this conversion")
+            return
+        }
+
+        // Check if conversion has output (text or file)
+        let hasTextOutput = updated.outputText != nil && !updated.outputText!.isEmpty
+        let hasFileOutput = updated.outputFileId != nil
+        let hasOutput = hasTextOutput || hasFileOutput
+
+        guard hasOutput else {
+            print("⚠️ No output to create chat from")
+            return
+        }
+
+        print("✅ Creating chat - hasTextOutput: \(hasTextOutput), hasFileOutput: \(hasFileOutput)")
 
         // Create chat title from input or conversion type
         let title: String
@@ -169,6 +185,7 @@ class ConversionService {
 
         let chatResult = chatStorage.createChat(title: title)
         guard case .ok(let chat) = chatResult else {
+            print("❌ Failed to create chat")
             return
         }
 
@@ -178,7 +195,15 @@ class ConversionService {
         }
 
         // Add assistant message with output
-        _ = chatStorage.createMessage(chatId: chat.id, role: .assistant, content: outputText)
+        if let outputText = updated.outputText, !outputText.isEmpty {
+            _ = chatStorage.createMessage(chatId: chat.id, role: .assistant, content: outputText)
+        } else if updated.type == .textToAudio, let fileId = updated.outputFileId {
+            // For text-to-audio, add a message with audio file reference
+            _ = chatStorage.createMessage(chatId: chat.id, role: .assistant, content: "audio://\(fileId)")
+        } else if hasFileOutput {
+            // For other file outputs without text
+            _ = chatStorage.createMessage(chatId: chat.id, role: .assistant, content: "✅ \(updated.type.displayName) completed successfully")
+        }
 
         // Update conversion metadata with chat ID
         var metadata = updated.metadata
@@ -190,7 +215,7 @@ class ConversionService {
             metadata: metadata
         )
 
-        print("✅ Created chat \(chat.id) from \(updated.type.displayName) conversion")
+        print("✅ Created chat \(chat.id) from \(updated.type.displayName) conversion with chat_id in metadata")
     }
 
     private func performStreamingConversion(
@@ -316,41 +341,6 @@ class ConversionService {
         )
     }
 
-    private func performImageToText(conversion: Conversion) async throws {
-        guard let fileId = conversion.inputFileId else {
-            throw ConversionError.missingInput
-        }
-
-        // Load file
-        let fileResult = fileStorage.getFile(id: fileId)
-        guard case .ok(let fileOpt) = fileResult, let file = fileOpt else {
-            throw ConversionError.fileNotFound
-        }
-
-        // Load image
-        let image: PlatformImage
-        #if canImport(UIKit)
-        guard let img = UIImage(contentsOfFile: file.absolutePath) else {
-            throw ConversionError.fileAccessDenied
-        }
-        image = img
-        #elseif canImport(AppKit)
-        guard let img = NSImage(contentsOfFile: file.absolutePath) else {
-            throw ConversionError.fileAccessDenied
-        }
-        image = img
-        #endif
-
-        // Analyze image with Qwen VLM
-        print("👁️ Analyzing image with Qwen VLM: \(file.name)")
-        let description = try await vlm.describeImage(image)
-
-        try updateConversionStorage(
-            id: conversion.id,
-            outputText: description,
-            metadata: ["model": "qwen-vl"]
-        )
-    }
 
     private func performTextToAudio(conversion: Conversion) async throws {
         guard let text = conversion.inputText, !text.isEmpty else {
